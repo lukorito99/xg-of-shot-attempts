@@ -1,3 +1,5 @@
+import copy
+
 import tensorflow as tf
 import json
 import math
@@ -64,12 +66,11 @@ from PyQt5.QtWidgets import (
     QToolButton,
     QMenu,
     QStyle,
-    QToolTip, QDialogButtonBox, QTextEdit, QShortcut, QProgressDialog
+    QToolTip, QDialogButtonBox, QTextEdit, QShortcut, QProgressDialog, QGroupBox
 )
 
 from action_recognition3 import inference_on_video
 from xg_module2 import XGModel
-
 
 class WindowState(Enum):
     NORMAL = 1
@@ -90,7 +91,6 @@ class PreviewPopup(QDialog):
         self.preview_label = QLabel(self)
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.layout.addWidget(self.preview_label)
-        # Set a fixed size (adjust as desired)
         self.resize(800, 450)
         # self.hide()
         self.setVisible(False)
@@ -116,7 +116,6 @@ class PreviewPopup(QDialog):
     def hide_preview(self):
         self.setVisible(False)
         # self.hide()
-
 
 class FineTuneDialog(QDialog):
     def __init__(self, parent, segment, which_boundary: str, step=0.1):
@@ -152,16 +151,15 @@ class FineTuneDialog(QDialog):
         self.which_boundary = which_boundary  # "start" or "end"
         self.step = step
 
-        # Save the original value so we can revert if the user cancels.
+        # Saving the original value to revert if the user cancels.
         if self.which_boundary == "start":
             self.original_value = segment.start
         else:
             self.original_value = segment.end
 
-        # Build the layout
         layout = QVBoxLayout(self)
 
-        # Display current boundary value
+        # current boundary value
         self.value_label = QLabel(self)
         self.value_label = QLabel(self)
         self.value_label.setStyleSheet("background-color: rgba(255,255,255,0.8); padding: 2px; border: 1px solid #000;")
@@ -169,7 +167,7 @@ class FineTuneDialog(QDialog):
         layout.addWidget(self.value_label, alignment=Qt.AlignCenter)
         self.update_value_label()
 
-        # Create adjustment buttons
+        # adjustment buttons
         btn_layout = QHBoxLayout()
         self.btn_minus = QPushButton(f"-{self.step:.5f}s", self)
         self.btn_plus = QPushButton(f"+{self.step:.5f}s", self)
@@ -177,11 +175,11 @@ class FineTuneDialog(QDialog):
         btn_layout.addWidget(self.btn_plus)
         layout.addLayout(btn_layout)
 
-        # Connect buttons to adjustment functions
+        # adjustment functions
         self.btn_minus.clicked.connect(lambda: self.adjust_boundary(-self.step))
         self.btn_plus.clicked.connect(lambda: self.adjust_boundary(self.step))
 
-        # Add standard OK/Cancel button box
+        # OK/Cancel button box
         self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
         layout.addWidget(self.button_box)
         self.button_box.accepted.connect(self.accept)
@@ -237,11 +235,10 @@ class FineTuneDialog(QDialog):
             self.parent().preview_popup.hide_preview()
         super().reject()
 
-
 class PointAnnotationDialog(QDialog):
     def __init__(self, frame_pixmap, boundary_label, timestamp, parent=None, existing_annotation=None):
         super().__init__(parent)
-        self.setWindowIcon(QIcon('black.png'))  # Match xG icon
+        self.setWindowIcon(QIcon('black.png'))
         self.setFont(QFont('Segoe Script', 12))
         if frame_pixmap is None or frame_pixmap.isNull():
             raise ValueError("PointAnnotationDialog received an invalid pixmap.")
@@ -297,13 +294,12 @@ class PointAnnotationDialog(QDialog):
         self.status_bar.setStyleSheet("background-color: #333333; border: none; padding: 2px;")
         main_layout.addWidget(self.status_bar)
 
-        # Create a scroll area for the image
+        # scroll area for the image
         self.scroll_area = QScrollArea(self)
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(self.scroll_area)
 
-        # Create the point annotation label
         self.image_label = PointAnnotationLabel(self)
         self.image_label.setAlignment(Qt.AlignCenter)
         self.original_pixmap = frame_pixmap
@@ -373,13 +369,12 @@ class PointAnnotationDialog(QDialog):
         self.annotation = self.image_label.point
         super().accept()
 
-
 class PointAnnotationLabel(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
-        self.point = None  # Store the annotation as a dict: {"x": float, "y": float}
+        self.point = None  # the annotation as a dict: {"x": float, "y": float}
         # Keep track of original image dimensions for scaling.
         self.original_width = 1
         self.original_height = 1
@@ -419,6 +414,2044 @@ class PointAnnotationLabel(QLabel):
             original_y = event.pos().y() * scale_y
             self.point = {"x": float(original_x), "y": float(original_y)}
             self.update()
+
+class FrameSelectorDialog(QDialog):
+    def __init__(self, frames, parent=None, segment=None):
+        super().__init__(parent)
+        self.frames = frames
+        self.current_index = 0
+        self.selected_frame = None
+        self.segment = segment
+
+        # Calculate frame timestamps if segment is provided
+        if segment:
+            self.frame_timestamps = np.linspace(segment.start, segment.end, len(frames))
+        else:
+            self.frame_timestamps = None
+
+        self.setWindowTitle("Select Frame")
+        self.setup_ui()
+        self.update_frame()
+
+    def setup_ui(self):
+        layout = QVBoxLayout()
+
+        # Image display
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setMinimumSize(800, 450)  # 16:9 aspect ratio
+        self.image_label.setStyleSheet("QLabel { background-color: black; }")
+        layout.addWidget(self.image_label)
+
+        # Frame info
+        info_layout = QHBoxLayout()
+        self.frame_counter = QLabel()
+        info_layout.addWidget(self.frame_counter)
+
+        if self.frame_timestamps is not None:
+            self.timestamp_label = QLabel()
+            info_layout.addWidget(self.timestamp_label)
+
+        info_layout.addStretch()
+        layout.addLayout(info_layout)
+
+        # Navigation buttons
+        nav_layout = QHBoxLayout()
+
+        self.prev_button = QPushButton("Previous Frame")
+        self.prev_button.clicked.connect(self.prev_frame)
+        nav_layout.addWidget(self.prev_button)
+
+        self.next_button = QPushButton("Next Frame")
+        self.next_button.clicked.connect(self.next_frame)
+        nav_layout.addWidget(self.next_button)
+
+        nav_layout.addStretch()
+
+        # Action buttons
+        self.select_button = QPushButton("Select This Frame")
+        self.select_button.clicked.connect(self.accept_frame)
+        nav_layout.addWidget(self.select_button)
+
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.reject)
+        nav_layout.addWidget(self.cancel_button)
+
+        layout.addLayout(nav_layout)
+        self.setLayout(layout)
+
+    def update_frame(self):
+        frame = self.frames[self.current_index]
+        # Convert BGR to RGB before displaying
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        height, width = rgb_frame.shape[:2]
+        bytes_per_line = 3 * width
+        q_img = QImage(rgb_frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
+        pixmap = QPixmap.fromImage(q_img)
+
+        # Scale pixmap to fit label while maintaining aspect ratio
+        scaled_pixmap = pixmap.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.image_label.setPixmap(scaled_pixmap)
+
+        # Update frame counter
+        self.frame_counter.setText(f"Frame {self.current_index + 1} of {len(self.frames)}")
+
+        # Update timestamp if available
+        if self.frame_timestamps is not None:
+            timestamp = self.frame_timestamps[self.current_index]
+            self.timestamp_label.setText(f"Time: {timestamp:.2f}s")
+
+        # Update button states
+        self.prev_button.setEnabled(self.current_index > 0)
+        self.next_button.setEnabled(self.current_index < len(self.frames) - 1)
+
+    def prev_frame(self):
+        if self.current_index > 0:
+            self.current_index -= 1
+            self.update_frame()
+
+    def next_frame(self):
+        if self.current_index < len(self.frames) - 1:
+            self.current_index += 1
+            self.update_frame()
+
+    def accept_frame(self):
+        self.selected_frame = self.frames[self.current_index]
+        self.accept()
+
+@dataclass
+class SoccerPitchConfiguration:
+    width: float = 80.0
+    length: float = 120.0
+    penalty_box_length: float = 16.5
+    goal_box_length: float = 5.5
+    penalty_box_width: float = 40.32
+    goal_box_width: float = 18.32
+    penalty_spot_distance: float = 11.0
+    centre_circle_radius: float = 9.15
+
+    # Top‑level list of landmark names in the exact order of IDs 1…32:
+    LANDMARK_NAMES = [
+        "Top left corner",  # 1
+        "Left 18yb boundary top",  # 2
+        "Left 6yd boundary top",  # 3
+        "Left 6yd boundary bottom",  # 4
+        "Left 18yb boundary bottom",  # 5
+        "Left penalty spot",  # 6
+        "Left 18yd box top",  # 7
+        "Left 6yd box top",  # 8
+        "Left 6yd box bottom",  # 9
+        "Left arc upper",  # 10
+        "Left arc lower",  # 11
+        "Left 18yd box bottom",  # 12
+        "Bottom left corner",  # 13
+
+        "Top center line",  # 14
+        "Center circle left",  # 15
+        "Center circle top",  # 16
+        "Center circle bottom",  # 17
+        "Center circle right",  # 18
+        "Bottom center line",  # 19
+
+        "Top right corner",  # 20
+        "Right 18yd box top",  # 21
+        "Right 6yd box top",  # 22
+        "Right 6yd box bottom",  # 23
+        "Right arc upper",  # 24
+        "Right arc lower",  # 25
+        "Right 18yb boundary top",  # 26
+        "Right 6yd boundary top",  # 27
+        "Right 6yd boundary bottom",  # 28
+        "Right 18yb boundary bottom",  # 29
+        "Right penalty spot",  # 30
+        "Right 18yd box bottom",  # 31
+        "Bottom right corner",  # 32
+    ]
+    all_landmarks: Dict[str, Tuple[int, float, float]] = field(default_factory=dict)
+
+    @property
+    def vertices(self) -> List[Tuple[float, float]]:
+        return [(self.all_landmarks[name][1], self.all_landmarks[name][2])
+                for name in self.LANDMARK_NAMES]
+
+
+class SchematicPitchGridWidget(QWidget):
+    landmarkDragged = pyqtSignal(int, QPoint)
+    landmarkDropped = pyqtSignal(int, QPoint)
+
+    def __init__(self, landmarks, edges, pitch_config=None, parent=None, margin=20):
+        super().__init__(parent)
+        self.landmarks = dict(landmarks)
+        next_id = max(self.landmarks.keys(), default=0) + 1
+        self.landmarks[next_id] = ("Centre Pitch", (60.0, 40.0))
+        self.edges = edges
+        self.margin = margin
+        self.selected = set()
+        self.hovered = None
+        self.radius = 10  # Slightly smaller radius for cleaner look
+        self.pitch_config = pitch_config or SoccerPitchConfiguration()
+        self.setMouseTracking(True)
+        self.drag_start_lid = None
+        self.drag_start_pos = None
+
+        # Set a fixed size for the grid widget based on the pitch dimensions
+        ppm = 7  # pixels per meter
+        fixed_width = int(self.pitch_config.length * ppm + 2 * margin)
+        fixed_height = int(self.pitch_config.width * ppm + 2 * margin)
+        self.setFixedSize(fixed_width, fixed_height)  # Use fixed size instead of minimum
+
+        # Change size policy to prevent automatic expansion
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+    def sizeHint(self):
+        # Return our fixed size
+        ppm = 7  # preferred pixels per meter
+        width = int(self.pitch_config.length * ppm + 2 * self.margin)
+        height = int(self.pitch_config.width * ppm + 2 * self.margin)
+        return QSize(width, height)
+
+    def setPreferredSize(self, size):
+        self._preferred_size = size
+
+    def get_pitch_rect(self):
+        w, h = self.width(), self.height()
+        m = self.margin
+        pitch_ratio = self.pitch_config.length / self.pitch_config.width
+        avail_w = w - 2 * m
+        avail_h = h - 2 * m
+
+        if avail_w / avail_h > pitch_ratio:
+            # Height is limiting
+            ph = avail_h
+            pw = ph * pitch_ratio
+        else:
+            # Width is limiting
+            pw = avail_w
+            ph = pw / pitch_ratio
+
+        x0 = m + (avail_w - pw) / 2
+        y0 = m + (avail_h - ph) / 2
+        return QRectF(x0, y0, pw, ph)
+
+    def mx(self, x_m):
+        rect = self.get_pitch_rect()
+        return rect.x() + (x_m / self.pitch_config.length) * rect.width()
+
+    def my(self, y_m):
+        rect = self.get_pitch_rect()
+        return rect.y() + (y_m / self.pitch_config.width) * rect.height()
+
+    def get_landmark_at(self, pos: QPoint) -> Optional[int]:
+        """
+        Return the landmark ID whose on‐screen circle contains pos,
+        or None if none.
+        """
+        for lid, (_, (x_m, y_m)) in self.landmarks.items():
+            px, py = self.mx(x_m), self.my(y_m)
+            # distance squared ≤ radius²?
+            dx, dy = pos.x() - px, pos.y() - py
+            if dx * dx + dy * dy <= self.radius * self.radius:
+                return lid
+        return None
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = self.get_pitch_rect()
+
+        # Draw pitch background
+        painter.fillRect(rect, QColor(0, 100, 0))
+
+        # Draw pitch outline
+        painter.setPen(QPen(Qt.white, 2))
+        painter.drawRect(rect)
+
+        # Draw center line
+        center_x = self.mx(self.pitch_config.length / 2)
+        painter.drawLine(
+            QPointF(center_x, rect.y()),
+            QPointF(center_x, rect.y() + rect.height())
+        )
+
+        # Draw all edges (lines)
+        for id1, id2 in self.edges:
+            if id1 in self.landmarks and id2 in self.landmarks:
+                _, (x1, y1) = self.landmarks[id1]
+                _, (x2, y2) = self.landmarks[id2]
+                painter.setPen(QPen(Qt.white, 1.5))
+                painter.drawLine(
+                    QPointF(self.mx(x1), self.my(y1)),
+                    QPointF(self.mx(x2), self.my(y2))
+                )
+
+        # Draw centre circle
+        centre_x, centre_y = self.pitch_config.length / 2, self.pitch_config.width / 2
+        arc_radius = self.pitch_config.centre_circle_radius
+
+        # Calculate QRectF for the circle to account for potential non-square scaling
+        width_in_pixels = arc_radius * 2 * rect.width() / self.pitch_config.length
+        height_in_pixels = arc_radius * 2 * rect.height() / self.pitch_config.width
+
+        circle_rect = QRectF(
+            self.mx(centre_x - arc_radius),
+            self.my(centre_y - arc_radius),
+            width_in_pixels,
+            height_in_pixels
+        )
+
+        painter.setPen(QPen(Qt.white, 2))
+        painter.drawEllipse(circle_rect)
+
+        # Draw penalty arcs for both sides
+        # Left penalty area
+        left_penalty_area = QRectF(
+            rect.x(),
+            self.my(centre_y - self.pitch_config.penalty_box_width / 2),
+            self.pitch_config.penalty_box_length * rect.width() / self.pitch_config.length,
+            self.pitch_config.penalty_box_width * rect.height() / self.pitch_config.width
+        )
+        painter.drawRect(left_penalty_area)
+
+        # Right penalty area
+        right_penalty_area = QRectF(
+            rect.right() - self.pitch_config.penalty_box_length * rect.width() / self.pitch_config.length,
+            self.my(centre_y - self.pitch_config.penalty_box_width / 2),
+            self.pitch_config.penalty_box_length * rect.width() / self.pitch_config.length,
+            self.pitch_config.penalty_box_width * rect.height() / self.pitch_config.width
+        )
+        painter.drawRect(right_penalty_area)
+
+        # Draw points
+        for lid, (name, (x, y)) in self.landmarks.items():
+            px, py = self.mx(x), self.my(y)
+            if lid in self.selected:
+                painter.setBrush(QBrush(Qt.green))
+            elif lid == self.hovered:
+                painter.setBrush(QBrush(Qt.yellow))
+            else:
+                painter.setBrush(QBrush(Qt.white))
+
+            painter.setPen(QPen(Qt.blue if lid in self.selected else Qt.black, 2))
+            painter.drawEllipse(QPointF(px, py), self.radius, self.radius)
+
+    def mousePressEvent(self, event):
+        lid = self.get_landmark_at(event.pos())
+        if lid is not None:
+            self._dragging_id = lid
+            self._orig_pos = event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        lid = self.get_landmark_at(event.pos())
+        if lid != self.hovered:
+            self.hovered = lid
+            self.update()
+            if lid is not None:
+                name, _ = self.landmarks[lid]
+                QToolTip.showText(event.globalPos(), name, self)
+            else:
+                QToolTip.hideText()
+
+        if hasattr(self, "_dragging_id"):
+            # fire a signal with the landmark and current global pos
+            self.landmarkDragged.emit(self._dragging_id, event.globalPos())
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if hasattr(self, "_dragging_id"):
+            self.unsetCursor()
+            self.landmarkDropped.emit(self._dragging_id, event.globalPos())
+            del self._dragging_id
+        else:
+            super().mouseReleaseEvent(event)
+
+class DraggableFrameLabel(QLabel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setAcceptDrops(False)  # we'll handle drops via signals now
+        self.mapped_points = {}  # lid -> (x_img, y_img)
+        self.undo_stack = []  # tuples of (lid, previous_value)
+        self.redo_stack = []
+        self.grid_widget = None
+        self._dragging_landmark = None
+        self._drag_start_global = None
+        self._adjusting_landmark = None  # For fine-tuning existing points
+        self.setMouseTracking(True)  # Enable mouse tracking for hover effects
+
+    def set_grid_widget(self, widget):
+        self.grid_widget = widget
+
+    def get_landmark_at(self, pos: QPoint) -> Optional[int]:
+        """
+        Return the landmark ID whose on-screen circle contains pos,
+        or None if none.
+        """
+        if not self.pixmap():
+            return None
+
+        # Convert to image coordinates
+        lbl_w, lbl_h = self.width(), self.height()
+        img_w, img_h = self.pixmap().width(), self.pixmap().height()
+        scale_x = lbl_w / img_w
+        scale_y = lbl_h / img_h
+
+        for lid, (x_img, y_img) in self.mapped_points.items():
+            # Convert image coordinates to label coordinates
+            x_lbl = x_img * scale_x
+            y_lbl = y_img * scale_y
+
+            # Check if within radius
+            dx, dy = pos.x() - x_lbl, pos.y() - y_lbl
+            if dx * dx + dy * dy <= 10 * 10:  # 10px radius for selection
+                return lid
+
+        return None
+
+    @pyqtSlot(int, QPoint)
+    def startDrag(self, lid, global_pos):
+        """
+        Called when the user mouses‐down on a grid point and starts dragging.
+        We just record which landmark and where we grabbed it.
+        """
+        self._dragging_landmark = lid
+        self._drag_start_global = global_pos
+        # Optionally change cursor:
+        self.setCursor(Qt.ClosedHandCursor)
+
+    @pyqtSlot(int, QPoint)
+    def endDrag(self, lid, global_pos):
+        """
+        Called when the user releases the mouse after dragging a landmark.
+        We convert the global pos into image coords, record undo/redo,
+        and update both frame and grid.
+        """
+        # only handle if it matches the one we started
+        if self._dragging_landmark != lid:
+            return
+
+        # map into our widget coordinates
+        local_pt = self.mapFromGlobal(global_pos)
+        x_lbl = max(0, min(local_pt.x(), self.width() - 1))
+        y_lbl = max(0, min(local_pt.y(), self.height() - 1))
+
+        # if there's a pixmap, convert label coords → pixmap coords
+        if self.pixmap() is not None:
+            lbl_w, lbl_h = self.width(), self.height()
+            img_w, img_h = self.pixmap().width(), self.pixmap().height()
+            # assume scaled to fit QLabel (keep aspect)?
+            # adjust if you use scaledContents or a different scaling policy
+            scale_x = img_w / lbl_w
+            scale_y = img_h / lbl_h
+            x_img = x_lbl * scale_x
+            y_img = y_lbl * scale_y
+        else:
+            # no pixmap: just use label coords
+            x_img, y_img = x_lbl, y_lbl
+
+        # record undo/redo
+        prev = self.mapped_points.get(lid, None)
+        self.undo_stack.append((lid, prev))
+        self.redo_stack.clear()
+
+        # store new mapping
+        self.mapped_points[lid] = (x_img, y_img)
+
+        # tell the grid to mark this one selected/highlighted
+        if self.grid_widget:
+            self.grid_widget.selected.add(lid)
+            self.grid_widget.update()
+
+        # cleanup
+        self._dragging_landmark = None
+        self.unsetCursor()
+        self.update()  # repaint to draw the dashed circle
+
+    def mousePressEvent(self, event):
+        """Handle mouse press for adjusting existing points."""
+        if event.button() == Qt.LeftButton:
+            lid = self.get_landmark_at(event.pos())
+            if lid is not None:
+                # Start adjusting an existing point
+                self._adjusting_landmark = lid
+                self.setCursor(Qt.ClosedHandCursor)
+                # Record position for undo
+                prev = self.mapped_points.get(lid, None)
+                self.undo_stack.append((lid, prev))
+                self.redo_stack.clear()
+
+                if self.grid_widget:
+                    self.grid_widget.selected.add(lid)
+                    self.grid_widget.update()
+
+                event.accept()
+                return
+
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        """Handle mouse movement for adjusting points or hovering effects."""
+        # Handle adjusting (dragging) existing points
+        if self._adjusting_landmark is not None:
+            lid = self._adjusting_landmark
+
+            # Get current position in label coordinates
+            x_lbl = max(0, min(event.x(), self.width() - 1))
+            y_lbl = max(0, min(event.y(), self.height() - 1))
+
+            # Convert to image coordinates
+            if self.pixmap() is not None:
+                lbl_w, lbl_h = self.width(), self.height()
+                img_w, img_h = self.pixmap().width(), self.pixmap().height()
+                scale_x = img_w / lbl_w
+                scale_y = img_h / lbl_h
+                x_img = x_lbl * scale_x
+                y_img = y_lbl * scale_y
+            else:
+                x_img, y_img = x_lbl, y_lbl
+
+            # Update the point position
+            self.mapped_points[lid] = (x_img, y_img)
+            self.update()
+            event.accept()
+            return
+
+        # Handle hover effects for existing points
+        lid = self.get_landmark_at(event.pos())
+        if lid is not None:
+            self.setCursor(Qt.OpenHandCursor)
+            # Show tooltip with landmark name
+            if self.grid_widget and lid in self.grid_widget.landmarks:
+                name = self.grid_widget.landmarks[lid][0]
+                QToolTip.showText(event.globalPos(), name, self)
+        else:
+            self.setCursor(Qt.ArrowCursor)
+            QToolTip.hideText()
+
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """Handle mouse release for fine adjustments."""
+        if event.button() == Qt.LeftButton and self._adjusting_landmark is not None:
+            self._adjusting_landmark = None
+            self.unsetCursor()
+            self.update()
+            event.accept()
+            return
+
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event):
+        """
+        Draw the frame (via QLabel) then overplot any mapped points
+        with a dashed outline if they're newly dropped.
+        """
+        super().paintEvent(event)
+
+        if not self.pixmap():
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        for lid, (x_img, y_img) in self.mapped_points.items():
+            # convert back into label coords
+            lbl_w, lbl_h = self.width(), self.height()
+            img_w, img_h = self.pixmap().width(), self.pixmap().height()
+            scale_x = lbl_w / img_w
+            scale_y = lbl_h / img_h
+            x_lbl = x_img * scale_x
+            y_lbl = y_img * scale_y
+
+            # Make the point semi-transparent if currently being adjusted
+            if lid == self._adjusting_landmark:
+                # Draw a transparent filled circle
+                painter.setBrush(QBrush(QColor(255, 0, 0, 120)))  # Semi-transparent red
+                painter.setPen(QPen(QColor(255, 0, 0, 200), 2))  # More opaque outline
+                r = 10
+                painter.drawEllipse(QPointF(x_lbl, y_lbl), r, r)
+
+                # Draw crosshairs for precise positioning
+                painter.setPen(QPen(QColor(255, 255, 255, 180), 1))
+                painter.drawLine(QPointF(x_lbl - 12, y_lbl), QPointF(x_lbl + 12, y_lbl))
+                painter.drawLine(QPointF(x_lbl, y_lbl - 12), QPointF(x_lbl, y_lbl + 12))
+            else:
+                # Standard appearance for normal points
+                is_selected = self.grid_widget and lid in self.grid_widget.selected
+                is_hovered = self.get_landmark_at(self.mapFromGlobal(QCursor.pos())) == lid
+
+                if is_hovered:
+                    # Highlight on hover
+                    painter.setBrush(QBrush(QColor(255, 255, 0, 120)))  # Yellow semi-transparent
+                    painter.setPen(QPen(QColor(255, 255, 0, 200), 2))
+                elif is_selected:
+                    # Selected points
+                    painter.setBrush(QBrush(QColor(0, 255, 0, 120)))  # Green semi-transparent
+                    painter.setPen(QPen(QColor(0, 255, 0, 200), 2))
+                else:
+                    # Normal points
+                    painter.setBrush(QBrush(QColor(255, 255, 255, 120)))  # White semi-transparent
+                    painter.setPen(QPen(QColor(0, 0, 0, 180), 2, Qt.DashLine))
+
+                r = 8
+                painter.drawEllipse(QPointF(x_lbl, y_lbl), r, r)
+
+                # Draw a small ID number by the point for better identification
+                if self.grid_widget and lid in self.grid_widget.landmarks:
+                    name = self.grid_widget.landmarks[lid][0]
+                    font = painter.font()
+                    font.setBold(True)
+                    painter.setFont(font)
+                    painter.setPen(QPen(QColor(0, 0, 0, 200), 1))
+
+                    # Draw a small background for better readability
+                    text_rect = QRectF(x_lbl + 10, y_lbl - 6, 25, 15)
+                    painter.fillRect(text_rect, QBrush(QColor(255, 255, 255, 150)))
+
+                    # Draw the landmark ID number
+                    painter.drawText(text_rect, Qt.AlignCenter, str(lid))
+
+    def undo(self):
+        if not self.undo_stack:
+            return
+        lid, prev = self.undo_stack.pop()
+        if lid in self.mapped_points:
+            self.redo_stack.append((lid, self.mapped_points[lid]))
+            if prev is None:
+                del self.mapped_points[lid]
+            else:
+                self.mapped_points[lid] = prev
+            if self.grid_widget:
+                self.grid_widget.selected.discard(lid)
+                self.grid_widget.update()
+            self.update()
+
+    def redo(self):
+        if not self.redo_stack:
+            return
+        lid, pos = self.redo_stack.pop()
+        self.undo_stack.append((lid, self.mapped_points.get(lid, None)))
+        self.mapped_points[lid] = pos
+        if self.grid_widget:
+            self.grid_widget.selected.add(lid)
+            self.grid_widget.update()
+        self.update()
+
+
+class DraggableFullPitch(QWidget):
+    markerChanged = pyqtSignal()
+
+    def __init__(self, marker_color=Qt.red, parent=None):
+        super().__init__(parent)
+        self.color = marker_color
+        self.half = 'left'  # 'left' or 'right'
+        self.marker_pos = None  # normalized (0–1,0–1) within selected half
+        self.undo_stack = []
+        self.redo_stack = []
+        self.dragging = False
+        # new marker interaction settings (tweakable)
+        self.snap_enabled = True
+        self.snap_threshold_px = 12.0  # pixel distance to snap
+        self.nudge_step_norm = 0.005  # keyboard nudge step in normalized coords (~0.5% of half width)
+        self._near_candidate = None  # (norm_x, norm_y) if within snap range (for visual hint)
+        self._drag_candidate_highlight = None
+
+        self.setMouseTracking(True)
+
+        # Pitch dimensions in meters (120m x 80m)
+        self.pitch_length = 120.0
+        self.pitch_width = 80.0
+
+    def set_half(self, half):
+        if half not in ('left', 'right'): return
+        self.half = half
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self.marker_pos = None
+        self.markerChanged.emit()
+        self.update()
+
+    def _pitch_rect(self):
+        """Get the rectangle for the displayed half pitch - fills entire available area"""
+        margin = 20
+        return self.rect().adjusted(margin, margin, -margin, -margin)
+
+    def _half_rect(self):
+        """Get the rectangle for the selected half (same as pitch rect now)"""
+        return self._pitch_rect()
+
+    def _to_norm(self, pos):
+        """Convert widget position to normalized coordinates within selected half"""
+        hr = self._half_rect()
+        if not hr.contains(pos):
+            return None
+
+        x = (pos.x() - hr.left()) / hr.width()
+        y = (pos.y() - hr.top()) / hr.height()
+        return (max(0.0, min(x, 1.0)), max(0.0, min(y, 1.0)))
+
+    def _to_widget(self, x, y):
+        """Convert normalized coordinates to widget position"""
+        hr = self._half_rect()
+        return QPointF(hr.left() + x * hr.width(), hr.top() + y * hr.height())
+
+    def mousePressEvent(self, e):
+        if e.button() != Qt.LeftButton:
+            return
+        hr = self._half_rect()
+        if not hr.contains(e.pos()):
+            return
+
+        # compute distance from click to marker widget position
+        clicked_pt = e.pos()
+
+        # if existing marker close to click, begin dragging
+        if self.marker_pos:
+            cur_widget_pt = self._to_widget(*self.marker_pos)
+            dist = (cur_widget_pt - QPointF(clicked_pt)).manhattanLength()
+            if dist < 16:  # enlarged hit area (pixels)
+                self.dragging = True
+                # refresh candidate highlight while dragging
+                self._update_snap_candidate(clicked_pt)
+                return
+
+        # otherwise, create a new marker (push undo)
+        self.undo_stack.append(self.marker_pos)
+        self.redo_stack.clear()
+        norm_pos = self._to_norm(e.pos())
+        if norm_pos:
+            # If snap is enabled, consider snapping on press if close enough
+            if self.snap_enabled:
+                snapped = self._maybe_snap(norm_pos)
+                if snapped:
+                    self.marker_pos = snapped
+                else:
+                    self.marker_pos = norm_pos
+            else:
+                self.marker_pos = norm_pos
+            self.markerChanged.emit()
+            self.update()
+
+    def mouseMoveEvent(self, e):
+        if self.dragging:
+            norm_pos = self._to_norm(e.pos())
+            if norm_pos:
+                # while dragging, live-snap only for visual hint; commit on release
+                if self.snap_enabled:
+                    snap = self._maybe_snap(norm_pos, only_hint=True)
+                    if snap:
+                        # show highlight but do not commit until release
+                        self._near_candidate = snap
+                    else:
+                        self._near_candidate = None
+                    # update marker to follow cursor for fluid control (but keep _near_candidate for commit)
+                    self.marker_pos = norm_pos
+                else:
+                    self.marker_pos = norm_pos
+                self.markerChanged.emit()
+                self.update()
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if self.dragging:
+            self.dragging = False
+            # on release, if there was a near candidate and snapping is enabled, snap to it
+            if self.snap_enabled and self._near_candidate:
+                self.undo_stack.append(self.marker_pos)
+                self.marker_pos = self._near_candidate
+                self._near_candidate = None
+            # clear transient highlight
+            self._drag_candidate_highlight = None
+            self.markerChanged.emit()
+            self.update()
+        super().mouseReleaseEvent(e)
+
+    def keyPressEvent(self, e):
+        # arrow keys nudge the marker in small normalized steps
+        if self.marker_pos is None:
+            return super().keyPressEvent(e)
+
+        nx, ny = self.marker_pos
+        changed = False
+        if e.key() == Qt.Key_Left:
+            nx = max(0.0, nx - self.nudge_step_norm)
+            changed = True
+        elif e.key() == Qt.Key_Right:
+            nx = min(1.0, nx + self.nudge_step_norm)
+            changed = True
+        elif e.key() == Qt.Key_Up:
+            ny = max(0.0, ny - self.nudge_step_norm)
+            changed = True
+        elif e.key() == Qt.Key_Down:
+            ny = min(1.0, ny + self.nudge_step_norm)
+            changed = True
+
+        if changed:
+            self.undo_stack.append(self.marker_pos)
+            self.marker_pos = (nx, ny)
+            # if snapping is enabled, allow immediate snap if close
+            if self.snap_enabled:
+                maybe = self._maybe_snap(self.marker_pos)
+                if maybe:
+                    self.marker_pos = maybe
+            self.markerChanged.emit()
+            self.update()
+        else:
+            super().keyPressEvent(e)
+
+    def undo(self):
+        if not self.undo_stack: return
+        prev = self.undo_stack.pop()
+        self.redo_stack.append(self.marker_pos)
+        self.marker_pos = prev
+        self.markerChanged.emit()
+        self.update()
+
+    def redo(self):
+        if not self.redo_stack: return
+        nxt = self.redo_stack.pop()
+        self.undo_stack.append(self.marker_pos)
+        self.marker_pos = nxt
+        self.markerChanged.emit()
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+
+        # Fill background
+        painter.fillRect(self.rect(), QColor(40, 100, 40))  # Darker grass background
+
+        # Get pitch rectangle (now represents only the selected half)
+        pr = self._pitch_rect()
+
+        # Fill pitch with grass color
+        painter.fillRect(pr, QColor(34, 139, 34))
+
+        # Draw half pitch markings
+        self.draw_half_pitch(painter, pr)
+
+        # Draw crosshair marker if exists
+        if self.marker_pos:
+            self.draw_crosshair_marker(painter)
+
+        painter.end()
+
+    def draw_coords_overlay(self, painter, half_outer: QRectF, side: str):
+        """
+        Draw a small translucent coords box just *inside* the selected half,
+        immediately next to the halfway border (center line).
+        side: 'left' or 'right' - which half is active.
+        """
+        # nothing to draw if no marker
+        if not self.marker_pos:
+            return
+
+        # Prepare text: normalized + absolute coordinates
+        nx, ny = self.marker_pos
+        abs_coords = self.get_absolute_pitch_coordinates()
+        if not abs_coords:
+            return
+        ax, ay = abs_coords
+
+        # Two-line label
+        text_lines = [f"{nx:.3f}, {ny:.3f}", f"{ax:.1f} m, {ay:.1f} m"]
+
+        f = painter.font()
+        f.setPointSize(max(10, f.pointSize()))  # keep at least small readable size
+        painter.setFont(f)
+        fm = painter.fontMetrics()
+
+        # compute text block size
+        text_width = max(fm.horizontalAdvance(line) for line in text_lines)
+        text_height = fm.height() * len(text_lines)
+
+        pad_x = 10
+        pad_y = 6
+        box_w = text_width + pad_x * 2
+        box_h = text_height + pad_y * 2
+
+        # center vertically around the pitch centerline midpoint
+        center_y = half_outer.top() + half_outer.height() / 2.0
+        box_y = center_y - box_h / 2.0
+
+        margin_from_border = 6  # pixels inside the half
+        if side == 'left':
+            box_x = half_outer.right() - box_w - margin_from_border
+        else:  # 'right'
+            box_x = half_outer.left() + margin_from_border
+
+        # Keep the box fully inside half_outer vertically (clamp)
+        if box_y < half_outer.top() + 4:
+            box_y = half_outer.top() + 4
+        if box_y + box_h > half_outer.bottom() - 4:
+            box_y = half_outer.bottom() - 4 - box_h
+
+        box_rect = QRectF(box_x, box_y, box_w, box_h)
+
+        # Draw background rounded rect + border + text
+        painter.save()
+        painter.setRenderHint(QPainter.TextAntialiasing, True)
+
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 170))  # translucent dark background
+        painter.drawRoundedRect(box_rect, 6, 6)
+
+        painter.setPen(QPen(QColor(220, 220, 220, 220)))
+        # draw text lines
+        tx = box_rect.left() + pad_x
+        ty = box_rect.top() + pad_y + fm.ascent()
+        for line in text_lines:
+            painter.drawText(QPointF(tx, ty), line)
+            ty += fm.height()
+
+        painter.restore()
+
+    def draw_coords_overlay(self, painter, half_outer: QRectF, side: str):
+        """
+        Draw a small translucent coords box positioned so it does not cover the marker.
+        If the preferred position would overlap the marker, try corner positions or nudge
+        the box away from the marker.
+        """
+        # only draw when there's a marker
+        if not self.marker_pos:
+            return
+
+        # Prepare text lines and metrics
+        nx, ny = self.marker_pos
+        abs_coords = self.get_absolute_pitch_coordinates()
+        if not abs_coords:
+            return
+        ax, ay = abs_coords
+        text_lines = [f"{nx:.3f}, {ny:.3f}", f"{ax:.1f} m, {ay:.1f} m"]
+
+        # Setup font smaller to reduce obstruction
+        f = painter.font()
+        f.setPointSize(max(8, f.pointSize() - 1))
+        painter.setFont(f)
+        fm = painter.fontMetrics()
+        text_width = max(fm.horizontalAdvance(line) for line in text_lines)
+        text_height = fm.height() * len(text_lines)
+
+        pad_x = 6
+        pad_y = 5
+        box_w = text_width + pad_x * 2
+        box_h = text_height + pad_y * 2
+
+        widget_rect = QRectF(self.rect())
+        # marker bounding rect (small circle around marker)
+        marker_pt = self._to_widget(*self.marker_pos)
+        marker_radius = 10.0
+        marker_rect = QRectF(marker_pt.x() - marker_radius, marker_pt.y() - marker_radius,
+                             marker_radius * 2, marker_radius * 2)
+
+        # Candidate positions (try outside the half first near the centerline as before)
+        margin_from_border = 6
+        candidates = []
+
+        # Preferred: outside the half near the centerline (same logic as before)
+        if side == 'left':
+            pref_x = half_outer.right() + margin_from_border
+            pref_y = half_outer.top() + (half_outer.height() - box_h) / 2.0
+            candidates.append(QRectF(pref_x, pref_y, box_w, box_h))
+        else:
+            pref_x = half_outer.left() - box_w - margin_from_border
+            pref_y = half_outer.top() + (half_outer.height() - box_h) / 2.0
+            candidates.append(QRectF(pref_x, pref_y, box_w, box_h))
+
+        # Corner candidates inside the widget but outside the half area
+        # top-right, bottom-right, top-left, bottom-left (relative to widget)
+        candidates += [
+            QRectF(widget_rect.right() - box_w - 8, widget_rect.top() + 8, box_w, box_h),  # top-right
+            QRectF(widget_rect.right() - box_w - 8, widget_rect.bottom() - box_h - 8, box_w, box_h),  # bottom-right
+            QRectF(widget_rect.left() + 8, widget_rect.top() + 8, box_w, box_h),  # top-left
+            QRectF(widget_rect.left() + 8, widget_rect.bottom() - box_h - 8, box_w, box_h),  # bottom-left
+        ]
+
+        # Also try positions just inside the half next to the centerline (fallback)
+        if side == 'left':
+            inside_x = half_outer.right() - box_w - margin_from_border
+        else:
+            inside_x = half_outer.left() + margin_from_border
+        inside_y = half_outer.top() + (half_outer.height() - box_h) / 2.0
+        candidates.append(QRectF(inside_x, inside_y, box_w, box_h))
+
+        # Choose the first candidate that doesn't intersect marker_rect and fits inside widget_rect
+        chosen = None
+        for cand in candidates:
+            if not cand.intersects(marker_rect) and widget_rect.contains(cand):
+                chosen = cand
+                break
+
+        # If none found, nudge away from marker in the direction opposite marker->centerline
+        if chosen is None:
+            # default to placing to the right of marker if space, else left, else above, else below
+            try_right = QRectF(marker_rect.right() + 8, marker_rect.top(), box_w, box_h)
+            try_left = QRectF(marker_rect.left() - 8 - box_w, marker_rect.top(), box_w, box_h)
+            try_above = QRectF(marker_rect.left(), marker_rect.top() - 8 - box_h, box_w, box_h)
+            try_below = QRectF(marker_rect.left(), marker_rect.bottom() + 8, box_w, box_h)
+            for cand in (try_right, try_left, try_above, try_below):
+                if widget_rect.contains(cand) and not cand.intersects(marker_rect):
+                    chosen = cand
+                    break
+
+        # Final fallback: clamp inside widget_rect
+        if chosen is None:
+            # place top-right but keep it inside widget
+            x = min(widget_rect.right() - box_w - 8, max(widget_rect.left() + 8, widget_rect.right() - box_w - 8))
+            y = widget_rect.top() + 8
+            chosen = QRectF(x, y, box_w, box_h)
+
+        # Draw the box and text
+        painter.save()
+        painter.setRenderHint(QPainter.TextAntialiasing, True)
+
+        # translucent background but less opaque so it is less intrusive
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 140))  # semi-transparent
+        painter.drawRoundedRect(chosen, 6, 6)
+
+        # thin light border
+        painter.setPen(QPen(QColor(200, 200, 200, 140), 1))
+        painter.drawRoundedRect(chosen, 6, 6)
+
+        # draw text lines
+        painter.setPen(QPen(QColor(240, 240, 240, 220)))
+        tx = chosen.left() + pad_x
+        ty = chosen.top() + pad_y + fm.ascent()
+        for line in text_lines:
+            painter.drawText(QPointF(tx, ty), line)
+            ty += fm.height()
+
+        painter.restore()
+
+    def draw_crosshair_marker(self, painter):
+        """Draw an improved marker: soft shadow + outer ring + inner dot + small ticks + small unobtrusive label."""
+        if not self.marker_pos:
+            return
+
+        pt = self._to_widget(*self.marker_pos)
+        x, y = pt.x(), pt.y()
+
+        # Visual parameters (pixels)
+        shadow_radius = 12
+        outer_radius = 7
+        inner_radius = 3
+        ring_width = 2
+        tick_len = 6
+
+        # DRAW soft shadow (semi-transparent big circle)
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        shadow_color = QColor(0, 0, 0, 90)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(shadow_color)
+        painter.drawEllipse(QPointF(x + 1.5, y + 1.5), shadow_radius, shadow_radius)
+
+        # Outer ring
+        ring_color = QColor(self.color)
+        ring_color.setAlpha(220)
+        painter.setPen(QPen(ring_color, ring_width))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(QPointF(x, y), outer_radius, outer_radius)
+
+        # Inner filled core
+        core_color = QColor(self.color)
+        core_color.setAlpha(240)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(core_color)
+        painter.drawEllipse(QPointF(x, y), inner_radius, inner_radius)
+
+        # Small cross ticks to indicate precision
+        tick_pen = QPen(ring_color, 1)
+        painter.setPen(tick_pen)
+        painter.drawLine(QPointF(x - tick_len, y), QPointF(x - outer_radius - 2, y))
+        painter.drawLine(QPointF(x + tick_len, y), QPointF(x + outer_radius + 2, y))
+        painter.drawLine(QPointF(x, y - tick_len), QPointF(x, y - outer_radius - 2))
+        painter.drawLine(QPointF(x, y + tick_len), QPointF(x, y + outer_radius + 2))
+
+        painter.restore()
+
+        # If a snap candidate is nearby, draw a subtle halo at candidate location
+        if self._near_candidate:
+            try:
+                cand_pt = self._to_widget(*self._near_candidate)
+                painter.save()
+                halo_col = QColor(255, 215, 0, 100)  # soft gold-ish halo
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(halo_col)
+                painter.drawEllipse(cand_pt, outer_radius + 6, outer_radius + 6)
+                painter.restore()
+            except Exception:
+                pass
+
+        # Draw small unobtrusive coordinate tooltip near marker, auto-offset so it doesn't cover the marker
+        try:
+            nx, ny = self.marker_pos
+            abs_coords = self.get_absolute_pitch_coordinates()
+            if abs_coords:
+                ax, ay = abs_coords
+                txt = f"{ax:.1f}m, {ay:.1f}m"
+                # font smaller
+                f = painter.font()
+                f.setPointSize(max(8, f.pointSize() - 1))
+                painter.setFont(f)
+                fm = painter.fontMetrics()
+                tw = fm.horizontalAdvance(txt)
+                th = fm.height()
+
+                # prefer top-right offset; if that would overlap marker, push further away
+                offset_x, offset_y = 12, - (inner_radius + 8)
+                tooltip_x = x + offset_x
+                tooltip_y = y + offset_y - th
+
+                # compute tooltip rect
+                padding = 6
+                rect = QRectF(tooltip_x, tooltip_y, tw + padding * 2, th + padding * 2)
+
+                # if tooltip intersects marker bounding circle, move it to a corner (bottom-right)
+                marker_rect = QRectF(x - shadow_radius, y - shadow_radius, shadow_radius * 2, shadow_radius * 2)
+                if rect.intersects(marker_rect):
+                    tooltip_x = x + 12
+                    tooltip_y = y + 12
+                    rect = QRectF(tooltip_x, tooltip_y, tw + padding * 2, th + padding * 2)
+
+                # clamp to widget rect
+                wrect = QRectF(self.rect())
+                if rect.right() > wrect.right() - 4:
+                    rect.moveRight(wrect.right() - 4)
+                if rect.left() < wrect.left() + 4:
+                    rect.moveLeft(wrect.left() + 4)
+                if rect.top() < wrect.top() + 4:
+                    rect.moveTop(wrect.top() + 4)
+                if rect.bottom() > wrect.bottom() - 4:
+                    rect.moveBottom(wrect.bottom() - 4)
+
+                # draw translucent background
+                painter.save()
+                painter.setRenderHint(QPainter.TextAntialiasing, True)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(0, 0, 0, 150))
+                painter.drawRoundedRect(rect, 5, 5)
+                # draw text
+                painter.setPen(QPen(QColor(240, 240, 240, 230)))
+                tx = rect.left() + padding
+                ty = rect.top() + padding + fm.ascent()
+                painter.drawText(QPointF(tx, ty), txt)
+                painter.restore()
+        except Exception:
+            pass
+
+    def draw_half_pitch(self, painter, pr):
+        # Set up pen for field lines
+        pen = QPen(Qt.white, 2)
+        painter.setPen(pen)
+
+        if self.half == 'left':
+            self.draw_left_half(painter, pr)
+        else:
+            self.draw_right_half(painter, pr)
+
+    def draw_left_half(self, painter, pr):
+        """Draw left half of the pitch, edge-to-edge on the left, vertically centered."""
+        # Real-world half pitch meters
+        half_length_m = 60.0
+        full_width_m = self.pitch_width  # 80.0m
+
+        # compute uniform scale so circles remain circular
+        scale_x = pr.width() / half_length_m
+        scale_y = pr.height() / full_width_m
+        scale = min(scale_x, scale_y)
+
+        total_half_px_w = half_length_m * scale
+        total_pitch_px_h = full_width_m * scale
+
+        # EDGE-TO-EDGE behavior: left half should touch pr.left()
+        x_offset = pr.left()
+        # Center vertically so pitch looks well proportioned
+        y_offset = pr.top() + (pr.height() - total_pitch_px_h) / 2.0
+
+        def px(x_m, y_m):
+            return QPointF(x_offset + x_m * scale, y_offset + y_m * scale)
+
+        # outer rect of the half (used for goal alignment)
+        half_outer = QRectF(x_offset, y_offset, total_half_px_w, total_pitch_px_h)
+        # painter.drawRect(half_outer)
+        painter.save()
+        painter.setBrush(QColor(50, 160, 60))  # lighter grass for the active half
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(half_outer)
+        painter.restore()
+
+        # now draw the outer rect / pitch lines
+        painter.setPen(QPen(Qt.white, 2))
+        painter.drawRect(half_outer)
+
+        # center line (right edge of our half)
+        painter.drawLine(QPointF(x_offset + total_half_px_w, y_offset),
+                         QPointF(x_offset + total_half_px_w, y_offset + total_pitch_px_h))
+
+        # center semicircle (on center line)
+        center_y = y_offset + total_pitch_px_h / 2.0
+        center_x = x_offset + total_half_px_w
+        arc_radius_px = 9.15 * scale
+        circle_rect = QRectF(center_x - arc_radius_px, center_y - arc_radius_px,
+                             arc_radius_px * 2, arc_radius_px * 2)
+        painter.drawArc(circle_rect, 90 * 16, 180 * 16)
+
+        # center spot
+        painter.drawEllipse(QPointF(center_x, center_y), 3, 3)
+
+        # penalty area (18-yard box)
+        penalty_width_m = 40.32
+        penalty_depth_m = 16.5
+        box_top_y = y_offset + (full_width_m / 2.0 - penalty_width_m / 2.0) * scale
+        box_left_x = x_offset  # goal line at left edge
+        penalty_box = QRectF(box_left_x, box_top_y, penalty_depth_m * scale, penalty_width_m * scale)
+        painter.drawRect(penalty_box)
+
+        # goal area (6-yard box)
+        goal_area_width_m = 18.32
+        goal_area_depth_m = 5.5
+        ga_top_y = y_offset + (full_width_m / 2.0 - goal_area_width_m / 2.0) * scale
+        ga_left_x = x_offset
+        painter.drawRect(QRectF(ga_left_x, ga_top_y, goal_area_depth_m * scale, goal_area_width_m * scale))
+
+        # penalty spot (11m from goal)
+        penalty_spot_x = x_offset + 11.0 * scale
+        penalty_spot_y = center_y
+        painter.drawEllipse(QPointF(penalty_spot_x, penalty_spot_y), 3, 3)
+
+        # penalty arc drawn only outside the box
+        self.draw_penalty_arc(painter, QPointF(penalty_spot_x, penalty_spot_y),
+                              arc_radius_px, box_left_x + penalty_depth_m * scale, side='left')
+
+        # draw the goal aligned to half_outer (ensures no gap)
+        self.draw_goal(painter, half_outer, 'left')
+        self.draw_coords_overlay(painter, half_outer, 'left')
+
+    def draw_right_half(self, painter, pr):
+        """Draw right half of the pitch, edge-to-edge on the right, vertically centered."""
+        half_length_m = 60.0
+        full_width_m = self.pitch_width  # 80.0m
+
+        scale_x = pr.width() / half_length_m
+        scale_y = pr.height() / full_width_m
+        scale = min(scale_x, scale_y)
+
+        total_half_px_w = half_length_m * scale
+        total_pitch_px_h = full_width_m * scale
+
+        # EDGE-TO-EDGE behavior: right half should touch pr.right()
+        x_offset = pr.right() - total_half_px_w
+        y_offset = pr.top() + (pr.height() - total_pitch_px_h) / 2.0
+
+        def px(x_m, y_m):
+            return QPointF(x_offset + x_m * scale, y_offset + y_m * scale)
+
+        half_outer = QRectF(x_offset, y_offset, total_half_px_w, total_pitch_px_h)
+        # painter.drawRect(half_outer)
+        painter.save()
+        painter.setBrush(QColor(50, 160, 60))  # lighter grass for the active half
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(half_outer)
+        painter.restore()
+
+        # now draw the outer rect / pitch lines
+        painter.setPen(QPen(Qt.white, 2))
+        painter.drawRect(half_outer)
+
+        # center line (left edge of our half)
+        painter.drawLine(QPointF(x_offset, y_offset), QPointF(x_offset, y_offset + total_pitch_px_h))
+
+        # center semicircle (on center line)
+        center_y = y_offset + total_pitch_px_h / 2.0
+        center_x = x_offset
+        arc_radius_px = 9.15 * scale
+        circle_rect = QRectF(center_x - arc_radius_px, center_y - arc_radius_px,
+                             arc_radius_px * 2, arc_radius_px * 2)
+        painter.drawArc(circle_rect, 270 * 16, 180 * 16)
+
+        # center spot
+        painter.drawEllipse(QPointF(center_x, center_y), 3, 3)
+
+        # penalty area (18-yard box) for right half (box at rightmost side)
+        penalty_width_m = 40.32
+        penalty_depth_m = 16.5
+        box_top_y = y_offset + (full_width_m / 2.0 - penalty_width_m / 2.0) * scale
+        box_right_x = x_offset + total_half_px_w
+        penalty_box = QRectF(box_right_x - penalty_depth_m * scale, box_top_y,
+                             penalty_depth_m * scale, penalty_width_m * scale)
+        painter.drawRect(penalty_box)
+
+        # goal area (6-yard box)
+        goal_area_width_m = 18.32
+        goal_area_depth_m = 5.5
+        ga_top_y = y_offset + (full_width_m / 2.0 - goal_area_width_m / 2.0) * scale
+        ga_right_x = x_offset + total_half_px_w
+        painter.drawRect(QRectF(ga_right_x - goal_area_depth_m * scale, ga_top_y,
+                                goal_area_depth_m * scale, goal_area_width_m * scale))
+
+        # penalty spot at 11m from goal (from right edge)
+        penalty_spot_x = x_offset + total_half_px_w - 11.0 * scale
+        penalty_spot_y = center_y
+        painter.drawEllipse(QPointF(penalty_spot_x, penalty_spot_y), 3, 3)
+
+        # penalty arc
+        self.draw_penalty_arc(painter, QPointF(penalty_spot_x, penalty_spot_y),
+                              arc_radius_px, box_right_x - penalty_depth_m * scale, side='right')
+
+        # draw goal aligned to half_outer
+        self.draw_goal(painter, half_outer, 'right')
+        self.draw_coords_overlay(painter, half_outer, 'right')
+
+    def draw_penalty_arc(self, painter, spot_pt, arc_radius_px, penalty_box_edge_x, side):
+        """
+        Draw the penalty arc centered at spot_pt with radius arc_radius_px, but only the portion
+        that lies outside the penalty box. penalty_box_edge_x is the x coordinate (widget coords)
+        of the inner edge of the penalty area (for left side this is positive to the right of the spot).
+        side is 'left' or 'right'.
+        """
+
+        cx = spot_pt.x()
+        cy = spot_pt.y()
+        r = arc_radius_px
+
+        # If the vertical line of the penalty box doesn't intersect the circle, draw a full semicircle
+        if side == 'left':
+            dx = penalty_box_edge_x - cx  # positive if box edge lies to the right of the spot
+            if dx <= -r:
+                # box edge is entirely left of the circle => draw entire semicircle facing centerline
+                arc_rect = QRectF(cx - r, cy - r, 2 * r, 2 * r)
+                painter.drawArc(arc_rect, int(90 * 16), int(180 * 16))
+                return
+            if dx >= r:
+                # circle entirely inside penalty area: nothing to draw
+                return
+            # compute clipping angles
+            cos_angle = dx / r
+            cos_angle = max(-1.0, min(1.0, cos_angle))
+            angle_rad = math.acos(cos_angle)
+            angle_deg = math.degrees(angle_rad)
+            # Qt angles: 0 deg at 3-o'clock, positive CCW. We want arc centered at 0 degrees (to the right).
+            start_deg = -angle_deg
+            span_deg = 2 * angle_deg
+            arc_rect = QRectF(cx - r, cy - r, 2 * r, 2 * r)
+            painter.drawArc(arc_rect, int(start_deg * 16), int(span_deg * 16))
+
+        else:  # right side
+            dx = cx - penalty_box_edge_x  # positive if box edge lies to left of the spot
+            if dx <= -r:
+                # box edge entirely right of circle => draw entire semicircle
+                arc_rect = QRectF(cx - r, cy - r, 2 * r, 2 * r)
+                painter.drawArc(arc_rect, int(270 * 16), int(180 * 16))
+                return
+            if dx >= r:
+                # circle entirely inside penalty area: nothing to draw
+                return
+            cos_angle = dx / r
+            cos_angle = max(-1.0, min(1.0, cos_angle))
+            angle_rad = math.acos(cos_angle)
+            angle_deg = math.degrees(angle_rad)
+            # For the right side the arc is centered around 180 degrees (to the left)
+            start_deg = 180 - angle_deg
+            span_deg = 2 * angle_deg
+            arc_rect = QRectF(cx - r, cy - r, 2 * r, 2 * r)
+            painter.drawArc(arc_rect, int(start_deg * 16), int(span_deg * 16))
+
+    def draw_goal(self, painter, half_outer: QRectF, side):
+        """
+        Draw the goal aligned to the provided half_outer QRectF (the outer boundary rectangle
+        of the half pitch). This ensures the goal lines up exactly with the goal line used
+        when drawing the penalty/6-yard boxes.
+        """
+        goal_width = (8.0 / self.pitch_width) * half_outer.height()  # 8m goal width
+        goal_y = half_outer.top() + (half_outer.height() - goal_width) / 2  # Center vertically
+        goal_depth = 25  # visual depth for net
+
+        if side == 'left':
+            goal_x = half_outer.left() - goal_depth
+            goal_line_x = half_outer.left()
+        else:
+            goal_x = half_outer.right()
+            goal_line_x = half_outer.right()
+
+        net_color = QColor(60, 120, 60, 200)
+        net_rect = QRectF(goal_x, goal_y - 5, goal_depth, goal_width + 10)
+        painter.fillRect(net_rect, net_color)
+
+        post_width = 6
+        post_color = QColor(250, 250, 250)
+        shadow_color = QColor(180, 180, 180)
+
+        crossbar_height = 6
+        crossbar_color = QColor(240, 240, 240)
+
+        if side == 'left':
+            # crossbar shadows and crossbars
+            painter.fillRect(QRectF(goal_x + 2, goal_y - crossbar_height // 2 + 2, goal_depth, crossbar_height),
+                             shadow_color)
+            painter.fillRect(QRectF(goal_x, goal_y - crossbar_height // 2, goal_depth, crossbar_height), crossbar_color)
+
+            painter.fillRect(
+                QRectF(goal_x + 2, goal_y + goal_width - crossbar_height // 2 + 2, goal_depth, crossbar_height),
+                shadow_color)
+            painter.fillRect(QRectF(goal_x, goal_y + goal_width - crossbar_height // 2, goal_depth, crossbar_height),
+                             crossbar_color)
+
+            painter.fillRect(QRectF(goal_x + 2, goal_y + 2, post_width, goal_width), shadow_color)
+            painter.fillRect(QRectF(goal_x, goal_y, post_width, goal_width), post_color)
+        else:
+            painter.fillRect(QRectF(goal_x - 2, goal_y - crossbar_height // 2 + 2, goal_depth, crossbar_height),
+                             shadow_color)
+            painter.fillRect(QRectF(goal_x, goal_y - crossbar_height // 2, goal_depth, crossbar_height), crossbar_color)
+
+            painter.fillRect(
+                QRectF(goal_x - 2, goal_y + goal_width - crossbar_height // 2 + 2, goal_depth, crossbar_height),
+                shadow_color)
+            painter.fillRect(QRectF(goal_x, goal_y + goal_width - crossbar_height // 2, goal_depth, crossbar_height),
+                             crossbar_color)
+
+            painter.fillRect(QRectF(goal_x + goal_depth - post_width + 2, goal_y + 2, post_width, goal_width),
+                             shadow_color)
+            painter.fillRect(QRectF(goal_x + goal_depth - post_width, goal_y, post_width, goal_width), post_color)
+
+        goal_line_thickness = 4
+        painter.fillRect(QRectF(goal_line_x - goal_line_thickness // 2, goal_y - post_width,
+                                goal_line_thickness, goal_width + 2 * post_width), Qt.white)
+
+        # net pattern
+        painter.setPen(QPen(QColor(200, 200, 200, 150), 1))
+        net_spacing = goal_width / 12
+        for i in range(1, 12):
+            y = goal_y + i * net_spacing
+            painter.drawLine(QPointF(goal_x, y), QPointF(goal_x + goal_depth, y))
+
+        net_h_spacing = goal_depth / 6
+        for i in range(1, 6):
+            x = goal_x + i * net_h_spacing
+            painter.drawLine(QPointF(x, goal_y), QPointF(x, goal_y + goal_width))
+
+        painter.setPen(QPen(QColor(200, 200, 200, 80), 1))
+        for i in range(0, int(goal_width), 15):
+            if side == 'left':
+                painter.drawLine(QPointF(goal_x, goal_y + i),
+                                 QPointF(goal_x + goal_depth, goal_y + i + goal_depth // 3))
+            else:
+                painter.drawLine(QPointF(goal_x + goal_depth, goal_y + i),
+                                 QPointF(goal_x, goal_y + i + goal_depth // 3))
+
+        painter.setPen(QPen(Qt.white, 2))
+
+    def get_absolute_pitch_coordinates(self):
+        """Convert normalized position to absolute pitch coordinates in meters"""
+        if not self.marker_pos:
+            return None
+
+        norm_x, norm_y = self.marker_pos
+
+        if self.half == 'left':
+            # Left half: x goes from 0 to 60m
+            pitch_x = norm_x * 60.0
+        else:
+            # Right half: x goes from 60 to 120m
+            pitch_x = 60.0 + (norm_x * 60.0)
+
+        # Y always goes from 0 to 80m
+        pitch_y = norm_y * 80.0
+
+        return (pitch_x, pitch_y)
+
+    def _get_special_normalized_points(self):
+        """
+        Return a list of normalized positions (nx, ny) within the selected half
+        that are meaningful snap targets. Uses the landmark dictionary in meters.
+
+        Normalization:
+            - For 'left' half: x ∈ [0..60] → nx = x/60
+            - For 'right' half: x ∈ [60..120] → nx = (x-60)/60
+            - y ∈ [0..80] always → ny = y/80
+        """
+        if not hasattr(self, "pitch_width"):
+            self.pitch_width = 80.0
+        half_length_m = 60.0
+        full_width_m = self.pitch_width
+
+        # landmarks (in meters) you shared
+        landmarks = {
+            "Top left corner": (0.0, 0.0),
+            "Top right corner": (120.0, 0.0),
+            "Bottom left corner": (0.0, 80.0),
+            "Bottom right corner": (120.0, 80.0),
+            "Center line top": (60.0, 0.0),
+            "Center line bottom": (60.0, 80.0),
+            "Center circle left": (50.0, 40.0),
+            "Center circle top": (60.0, 30.0),
+            "Center circle right": (70.0, 40.0),
+            "Center circle bottom": (60.0, 50.0),
+            "Left penalty spot": (12.0, 40.0),
+            "Right penalty spot": (108.0, 40.0),
+            "Left 6yd box top": (6.0, 30.0),
+            "Left 6yd box bottom": (6.0, 50.0),
+            "Right 6yd box top": (114.0, 30.0),
+            "Right 6yd box bottom": (114.0, 50.0),
+            "Left 18yd box top": (18.0, 18.0),
+            "Left 18yd box bottom": (18.0, 62.0),
+            "Right 18yd box top": (102.0, 18.0),
+            "Right 18yd box bottom": (102.0, 62.0),
+            "Left goal box top": (0.0, 30.0),
+            "Left goal box bottom": (0.0, 50.0),
+            "Right goal box top": (120.0, 30.0),
+            "Right goal box bottom": (120.0, 50.0),
+        }
+
+        candidates = []
+
+        for name, (xm, ym) in landmarks.items():
+            # Only keep landmarks inside the currently active half
+            if self.half == "left" and xm <= 60.0:
+                nx = xm / half_length_m
+                ny = ym / full_width_m
+                candidates.append((nx, ny))
+            elif self.half == "right" and xm >= 60.0:
+                nx = (xm - 60.0) / half_length_m
+                ny = ym / full_width_m
+                candidates.append((nx, ny))
+
+        return candidates
+
+    def _maybe_snap(self, norm_pos, only_hint=False):
+        """
+        Given a normalized pos (nx, ny), check special points and return the closest
+        (nx, ny) if within snap_threshold_px (in widget coordinates). If only_hint=True,
+        return candidate for visual hint but don't commit any state.
+        """
+        try:
+            px, py = None, None
+            w_candidates = []
+            for cand in self._get_special_normalized_points():
+                # compute widget coords for candidate
+                wp = self._to_widget(*cand)
+                w_candidates.append((cand, wp))
+            # convert input norm_pos to widget coords
+            inp_widget = self._to_widget(*norm_pos)
+            best = None
+            best_dist = float('inf')
+            for cand_norm, wp in w_candidates:
+                d = math.hypot(wp.x() - inp_widget.x(), wp.y() - inp_widget.y())
+                if d < best_dist:
+                    best_dist = d
+                    best = (cand_norm, wp, d)
+            if best and best_dist <= self.snap_threshold_px:
+                # candidate close enough to snap
+                if only_hint:
+                    # return normalized candidate for highlighting
+                    return best[0]
+                else:
+                    return best[0]
+            else:
+                return None
+        except Exception:
+            return None
+
+    def _update_snap_candidate(self, widget_pos):
+        """
+        Helper to set _near_candidate while dragging (widget_pos is a QPoint)
+        """
+        try:
+            norm = self._to_norm(widget_pos)
+            if not norm:
+                self._near_candidate = None
+                return
+            cand = self._maybe_snap(norm, only_hint=True)
+            self._near_candidate = cand
+        except Exception:
+            self._near_candidate = None
+
+
+class DirectPitchAnnotationDialog(QDialog):
+    """
+    Direct pitch annotation dialog that combines your original UX (half selection,
+    undo/redo, confirm/cancel, pitch widget) with a scrollable high-resolution
+    reference frame preview on the right.
+
+    Usage:
+        dlg = DirectPitchAnnotationDialog(frame_pixmap=some_qpixmap, marker_color=Qt.red, marker_label="Shot Start", parent=self)
+        if dlg.exec_() == QDialog.Accepted:
+            pitch_pos = dlg.get_pitch_position()
+            half = dlg.get_selected_half()
+            abs_coords = dlg.get_absolute_pitch_coordinates()
+    """
+
+    def __init__(self, frame_pixmap=None, marker_color=Qt.red, marker_label="Shot Point", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Direct Pitch Annotation – {marker_label}")
+        self.resize(1000, 650)
+        v = QVBoxLayout(self)
+
+        # --- Group: choose left/right half ---
+        grp = QGroupBox("Select Half for Annotation")
+        grp.setStyleSheet("QGroupBox { font-weight: bold; }")
+        hb = QHBoxLayout(grp)
+        self.left_rb = QRadioButton("Left Half")
+        self.right_rb = QRadioButton("Right Half")
+        self.left_rb.setChecked(True)
+
+        # Style the radio buttons
+        radio_style = """
+            QRadioButton {
+                font-size: 11pt;
+                padding: 5px;
+            }
+            QRadioButton::indicator {
+                width: 15px;
+                height: 15px;
+            }
+        """
+        self.left_rb.setStyleSheet(radio_style)
+        self.right_rb.setStyleSheet(radio_style)
+
+        hb.addWidget(self.left_rb)
+        hb.addWidget(self.right_rb)
+        hb.addStretch(1)
+        v.addWidget(grp)
+
+        # --- Main horizontal area: pitch widget (left) + scrollable frame (right) ---
+        main_h = QHBoxLayout()
+        # --- Main horizontal area: pitch widget (left) + scrollable frame (right) ---
+        main_h = QHBoxLayout()
+
+        # Pitch widget (left) - reuse your DraggableFullPitch widget
+        self.widget = None
+        try:
+            self.widget = DraggableFullPitch(marker_color)
+            # ensure min height like original
+            self.widget.setMinimumHeight(400)
+            # ensure the pitch keeps a visible column width so it cannot be fully squeezed by the frame
+            PITCH_COL_WIDTH = 420
+            self.widget.setMinimumWidth(PITCH_COL_WIDTH)
+            self.widget.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+            print("[DEBUG] DraggableFullPitch created successfully")
+        except Exception as e:
+            # fallback placeholder in case widget class is not available here
+            print(f"[DEBUG] DraggableFullPitch creation failed: {e}")
+            self.widget = QWidget()
+            self.widget.setMinimumHeight(400)
+            self.widget.setMinimumWidth(420)
+
+        # Add the pitch widget as the first column
+        main_h.addWidget(self.widget, 0)
+
+        # --- Right: scrollable frame preview ---
+        # --- Right: scrollable frame preview (both axes) ---
+        right_v = QVBoxLayout()
+        self.frame_scroll = QScrollArea()
+        # keep pixmap natural size so scrollbars appear when required
+        # and explicitly allow both scrollbars when needed
+        self.frame_scroll.setWidgetResizable(False)
+        self.frame_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.frame_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        self.frame_preview_label = QLabel()
+        self.frame_preview_label.setAlignment(Qt.AlignCenter)
+        # do not scale the pixmap (we want real pixel size so scrollbars appear)
+        self.frame_preview_label.setScaledContents(False)
+        self.frame_preview_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+        if frame_pixmap is not None:
+            try:
+                if isinstance(frame_pixmap, QPixmap):
+                    pm = frame_pixmap
+                else:
+                    pm = QPixmap.fromImage(frame_pixmap)
+
+                # show full resolution and make label the pixmap size so scrollbars engage
+                self.frame_preview_label.setPixmap(pm)
+                self.frame_preview_label.setFixedSize(pm.size())
+
+                # cap the scroll area width/height so the pitch column stays visible
+                try:
+                    screen = QApplication.primaryScreen()
+                    screen_w = screen.size().width() if screen else 1600
+                    screen_h = screen.size().height() if screen else 900
+                except Exception:
+                    screen_w, screen_h = 1600, 900
+
+                pitch_col_w = getattr(self.widget, "minimumWidth", lambda: 420)() if callable(
+                    getattr(self.widget, "minimumWidth", None)) else 420
+                max_frame_w = max(600, int(screen_w - pitch_col_w - 200))
+                max_frame_h = max(360, int(screen_h - 200))
+
+                # let scroll area be no wider/taller than these caps (but will still show scrollbars if pixmap larger)
+                self.frame_scroll.setMaximumWidth(min(pm.width(), max_frame_w))
+                self.frame_scroll.setMaximumHeight(min(pm.height(), max_frame_h))
+
+            except Exception as e:
+                print(f"[DEBUG] Failed to set frame pixmap: {e}")
+                self.frame_preview_label.setText("Reference frame preview unavailable.")
+        else:
+            self.frame_preview_label.setText("Reference frame preview unavailable.")
+
+        self.frame_scroll.setWidget(self.frame_preview_label)
+        right_v.addWidget(self.frame_scroll, 1)
+
+        # Instruction text (same as your earlier instruction)
+        instr = QLabel(
+            "Click on the pitch (left) to place the shot marker. The frame is on the right is for reference.")
+        instr.setWordWrap(True)
+        right_v.addWidget(instr)
+
+        main_h.addLayout(right_v, 1)
+
+        # ensure left column (pitch) keeps its column and right column expands when available
+        main_h.setStretch(0, 0)  # pitch: fixed-ish
+        main_h.setStretch(1, 1)  # frame: takes the leftover space
+
+        v.addLayout(main_h, 1)
+
+        # --- Control buttons (undo/redo on left, confirm/cancel on right) ---
+        ctrl = QHBoxLayout()
+
+        # Undo / Redo buttons (styled similarly to your original)
+        self.undo_btn = QPushButton("Undo")
+        self.redo_btn = QPushButton("Redo")
+
+        btn_style = """
+            QPushButton {
+                font-size: 10pt;
+                padding: 6px 12px;
+                border: 2px solid #ccc;
+                border-radius: 4px;
+                background: white;
+            }
+            QPushButton:hover {
+                background: #f0f0f0;
+                border-color: #999;
+            }
+            QPushButton:disabled {
+                background: #f5f5f5;
+                color: #999;
+                border-color: #ddd;
+            }
+        """
+        self.undo_btn.setStyleSheet(btn_style)
+        self.redo_btn.setStyleSheet(btn_style)
+
+        ctrl.addWidget(self.undo_btn)
+        ctrl.addWidget(self.redo_btn)
+        ctrl.addStretch()
+
+        # Confirm / Cancel buttons (styled)
+        self.confirm_btn = QPushButton("✓ Confirm Position")
+        self.cancel_btn = QPushButton("✗ Cancel")
+
+        confirm_style = """
+            QPushButton {
+                font-size: 11pt;
+                font-weight: bold;
+                padding: 8px 16px;
+                border-radius: 4px;
+                background: #28a745;
+                color: white;
+                border: none;
+            }
+            QPushButton:hover {
+                background: #218838;
+            }
+            QPushButton:disabled {
+                background: #6c757d;
+            }
+        """
+
+        cancel_style = """
+            QPushButton {
+                font-size: 11pt;
+                padding: 8px 16px;
+                border-radius: 4px;
+                background: #dc3545;
+                color: white;
+                border: none;
+            }
+            QPushButton:hover {
+                background: #c82333;
+            }
+        """
+
+        self.confirm_btn.setStyleSheet(confirm_style)
+        self.cancel_btn.setStyleSheet(cancel_style)
+
+        ctrl.addWidget(self.confirm_btn)
+        ctrl.addWidget(self.cancel_btn)
+        v.addLayout(ctrl)
+
+        # --- Connections & signals ---
+        # Left/right radio toggles -> set half on widget if widget supports it
+        def on_half_toggled(val):
+            half = 'left' if self.left_rb.isChecked() else 'right'
+            if hasattr(self.widget, "set_half"):
+                try:
+                    self.widget.set_half(half)
+                except Exception:
+                    pass
+
+        self.left_rb.toggled.connect(on_half_toggled)
+        self.right_rb.toggled.connect(on_half_toggled)
+
+        # Undo / Redo -> call widget methods if present
+        if hasattr(self.widget, "undo"):
+            self.undo_btn.clicked.connect(self.widget.undo)
+        else:
+            self.undo_btn.setEnabled(False)
+        if hasattr(self.widget, "redo"):
+            self.redo_btn.clicked.connect(self.widget.redo)
+        else:
+            self.redo_btn.setEnabled(False)
+
+        # Confirm / Cancel
+        self.confirm_btn.clicked.connect(self.on_accept)
+        self.cancel_btn.clicked.connect(self.reject)
+
+        # When widget state changes, update UI state (enable/disable confirm)
+        if hasattr(self.widget, "markerChanged"):
+            try:
+                self.widget.markerChanged.connect(self.update_ui_state)
+            except Exception:
+                # signal exist check fallback
+                pass
+
+        # If your widget exposes a property `marker_pos` and undo/redo stacks, use those
+        # Initialize UI state
+        self.update_ui_state()
+
+    def update_ui_state(self):
+        """Update UI state based on current marker position and undo/redo availability."""
+        has_marker = False
+        try:
+            has_marker = bool(getattr(self.widget, "marker_pos", None))
+        except Exception:
+            has_marker = False
+
+        self.confirm_btn.setEnabled(has_marker)
+
+        # Update undo/redo button states based on widget stacks if present
+        try:
+            self.undo_btn.setEnabled(bool(getattr(self.widget, "undo_stack", None)))
+        except Exception:
+            self.undo_btn.setEnabled(False)
+        try:
+            self.redo_btn.setEnabled(bool(getattr(self.widget, "redo_stack", None)))
+        except Exception:
+            self.redo_btn.setEnabled(False)
+
+    def get_pitch_position(self):
+        """Return the marker position in normalized coordinates (0-1, 0-1) within the selected half."""
+        try:
+            return getattr(self.widget, "marker_pos", None)
+        except Exception:
+            return None
+
+    def get_selected_half(self):
+        """Return which half is currently selected ('left'|'right')."""
+        return 'left' if self.left_rb.isChecked() else 'right'
+
+    def get_absolute_pitch_coordinates(self):
+        """Convert normalized position to absolute pitch coordinates in meters, via widget helper."""
+        if hasattr(self.widget, "get_absolute_pitch_coordinates"):
+            try:
+                return self.widget.get_absolute_pitch_coordinates()
+            except Exception:
+                return None
+        return None
+
+    def on_accept(self):
+        """Called when user clicks Confirm. ensures a marker exists before accept."""
+        if self.get_pitch_position() is None:
+            resp = self._show_confirm_dialog("No marker placed",
+                                             "No pitch marker detected. Do you want to accept without placing a pitch marker?")
+            if resp != QMessageBox.Yes:
+                return
+        self.accept()
+
+    def _show_confirm_dialog(self, title, text):
+        resp = QMessageBox.question(self, title, text, QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        return resp
+
+class LandmarkMappingDialog(QDialog):
+    def __init__(self, frame_pixmaps, segment, landmarks, edges, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Pitch Landmark Selection")
+        self.resize(1200, 800)
+
+        # Main horizontal layout with better stretch factors
+        layout = QHBoxLayout(self)
+        layout.setSpacing(10)  # Add some spacing between sections
+        self.frames = frame_pixmaps
+        self.segment = segment
+        self.current_frame = self.frames[0]
+
+        # — Left: Frame + scrolling —
+        left_container = QWidget()
+        left = QVBoxLayout(left_container)
+        left.setContentsMargins(0, 0, 0, 0)
+
+        self.frame_label = DraggableFrameLabel()
+        pix = self._to_pixmap(self.current_frame)
+        self.frame_label.setPixmap(pix)
+        self.frame_label.setAlignment(Qt.AlignCenter)
+        self.frame_label.setMinimumSize(pix.width(), pix.height())
+
+        frame_scroll = QScrollArea()
+        frame_scroll.setWidgetResizable(False)
+        frame_scroll.setWidget(self.frame_label)
+        frame_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        frame_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        left.addWidget(frame_scroll, 1)
+
+        BUTTON_CSS = """
+                    QPushButton {
+                        background-color: #444444;
+                        color: white;
+                        border: 1px solid #666666;
+                        border-radius: 4px;
+                        padding: 5px 15px;
+                        margin: 8px;
+                        font-size: 14px;
+                    }
+                    QPushButton:hover {
+                        background-color: #666666;
+                    }
+                """
+
+        nav = QHBoxLayout()
+        browse_btn = QPushButton("Browse Frames")
+        browse_btn.clicked.connect(self.browse_frames)
+        browse_btn.setStyleSheet(BUTTON_CSS)
+        nav.addWidget(browse_btn)
+        left.addLayout(nav)
+
+        inst = QLabel("<b>Click & drag points from the pitch grid (right) onto video frame on left.</b><br>"
+                      "Map at least 4 points. If not possible, click browse frames to look for more in other frames")
+        inst.setStyleSheet(
+            "color: #444; font-size: 15px; background: #f9f9f9; "
+            "padding: 8px; border-radius: 8px;"
+        )
+        inst.setWordWrap(True)
+        left.addWidget(inst)
+
+        # — Right: Grid + scrolling —
+        right_container = QWidget()
+        right = QVBoxLayout(right_container)
+        right.setContentsMargins(0, 0, 0, 0)
+
+        self.grid_widget = SchematicPitchGridWidget(landmarks, edges)
+
+        # Calculate appropriate size for the grid based on the pitch dimensions
+        ppm = 7  # pixels per meter
+        w_m = self.grid_widget.pitch_config.length
+        h_m = self.grid_widget.pitch_config.width
+        m = self.grid_widget.margin
+
+        grid_scroll = QScrollArea()
+        grid_scroll.setWidgetResizable(False)  # Important: don't resize the widget to fit
+        grid_scroll.setWidget(self.grid_widget)
+
+        # Set a fixed viewport size for the scroll area to ensure scrollbars appear
+        grid_scroll_viewport_width = min(500, int(w_m * ppm + 2 * m))  # Limit to 500px or calculated size
+        grid_scroll_viewport_height = min(500, int(h_m * ppm + 2 * m))  # Limit to 500px or calculated size
+        grid_scroll.setMinimumSize(grid_scroll_viewport_width, grid_scroll_viewport_height)
+
+        grid_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        grid_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+
+        grid_scroll.setStyleSheet("""
+            QScrollArea {
+                background-color: #1A1A1A;
+                border: 1px solid #444;
+            }
+            QScrollBar:vertical, QScrollBar:horizontal {
+                background: #2D2D2D; width:12px; height:12px; margin:0px;
+            }
+            QScrollBar::handle {
+                background: #444; border-radius:6px;
+            }
+            QScrollBar::handle:hover {
+                background: #666;
+            }
+            QScrollBar::add-line, QScrollBar::sub-line {
+                background:none; height:0px; width:0px;
+            }
+        """)
+        right.addWidget(grid_scroll, 1)
+
+        # — Buttons —
+        buttons_layout = QVBoxLayout()
+        self.confirm_btn = QPushButton("Confirm Mapping")
+        self.confirm_btn.clicked.connect(self.on_confirm)
+        self.undo_btn = QPushButton("Undo")
+        self.undo_btn.clicked.connect(self.frame_label.undo)
+        self.redo_btn = QPushButton("Redo")
+        self.redo_btn.clicked.connect(self.frame_label.redo)
+
+        for b in (self.confirm_btn, self.undo_btn, self.redo_btn):
+            b.setStyleSheet(BUTTON_CSS)
+            buttons_layout.addWidget(b)
+
+        right.addLayout(buttons_layout)
+
+        # Add the left and right containers to the main layout with equal stretching
+        layout.addWidget(left_container, 1)  # 50% width
+        layout.addWidget(right_container, 1)  # 50% width
+
+        # — Connect drag/drop —
+        self.grid_widget.landmarkDragged.connect(self.frame_label.startDrag)
+        self.grid_widget.landmarkDropped.connect(self.frame_label.endDrag)
+        self.frame_label.set_grid_widget(self.grid_widget)
+
+        self.setLayout(layout)
+
+    def get_mapped_points(self):
+        return self.frame_label.mapped_points
+
+    @property
+    def selected_ids(self):
+        return list(self.get_mapped_points().keys())
+
+    def _to_pixmap(self, frame_np):
+        # Convert BGR to RGB
+        rgb_frame = cv2.cvtColor(frame_np, cv2.COLOR_BGR2RGB)
+        h, w, _ = rgb_frame.shape
+        bytes_per_line = 3 * w
+        img = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        return QPixmap.fromImage(img)
+
+    def browse_frames(self):
+        dlg = FrameSelectorDialog(self.frames, parent=self, segment=self.segment)
+        if dlg.exec_():
+            self.current_frame = dlg.selected_frame
+            pix = self._to_pixmap(self.current_frame)
+            self.frame_label.setPixmap(pix)
+            self.frame_label.setMinimumSize(pix.width(), pix.height())
+            self.frame_label.update()
+
+    def on_confirm(self):
+        if len(self.frame_label.mapped_points) < 4:
+            # prompt the user to browse more frames
+            dlg = FrameSelectorDialog(self.frames, parent=self, segment=self.segment)
+            if dlg.exec_():
+                # user selected a new frame: replace and continue
+                self.current_frame = dlg.selected_frame
+                pix = self._to_pixmap(self.current_frame)
+                self.frame_label.setPixmap(pix)
+                self.frame_label.setMinimumSize(pix.width(), pix.height())
+                self.frame_label.update()
+            else:
+                # user cancelled browsing: stay here
+                return
+        else:
+            # enough points: accept and close
+            self.accept()
 
 class XGShotPlotDialog(QDialog):
     def __init__(self, start_pitch, end_pitch, xg_val, parent=None):
@@ -1022,7 +3055,6 @@ class XGShotPlotDialog(QDialog):
             painter.drawLine(QPointF(goal_post_x + i, goal_post_y),
                              QPointF(goal_post_x + i + goal_depth, goal_post_y + goal_depth))
 
-
         # Reset pen for other drawings
         painter.setPen(QPen(Qt.white, 2))
 
@@ -1103,8 +3135,9 @@ class XGShotPlotDialog(QDialog):
             painter.setPen(Qt.black)
             painter.drawText(tooltip_x + 5, tooltip_y - 5, self.hover_text)
 
+
 class ShotTransitionDialog(QDialog):
-    def __init__(self, frame_pixmaps, pitch_positions, parent=None):
+    def __init__(self, frame_pixmaps, pitch_positions, parent=None, retried=False):
         """
         A dialog showing an animated transition of a shot with synchronized views.
 
@@ -1116,6 +3149,8 @@ class ShotTransitionDialog(QDialog):
             Ball positions in meters corresponding to each frame
         parent: QWidget, optional
             Parent widget
+        retried: bool, optional
+            Whether the segment was retried with a fallback homography (H)
         """
         super().__init__(parent)
         self.setWindowTitle("Shot Attempt Transition")
@@ -1160,6 +3195,12 @@ class ShotTransitionDialog(QDialog):
         self.animation_timer.start()
         self.animation_start_time = time.time()
 
+        # Add warning banner if retried
+        if getattr(self, 'retried', False):
+            warning = QLabel("⚠️ This segment used a fallback homography (H)")
+            warning.setStyleSheet("color: red; font-weight: bold; padding: 4px;")
+            self.layout().addWidget(warning)
+
     def setup_ui(self):
         """Create and arrange all UI components"""
         main_layout = QVBoxLayout(self)
@@ -1182,14 +3223,12 @@ class ShotTransitionDialog(QDialog):
         frame_counter_layout = QHBoxLayout()
         frame_counter_layout.setContentsMargins(0, 0, 0, 1)
 
-
         self.frame_counter = QLabel("1/5")
         self.frame_counter.setAlignment(Qt.AlignRight)
         self.frame_counter.setStyleSheet("font-size: 10 pt; color: #6c757d;")
         frame_counter_layout.addStretch()  # Push counter to the right
         frame_counter_layout.addWidget(self.frame_counter)
         frame_container.addLayout(frame_counter_layout)
-
 
         self.overlay_label = QLabel(self)
         self.overlay_label.setAlignment(Qt.AlignCenter)
@@ -1553,7 +3592,6 @@ class ShotTransitionDialog(QDialog):
         # Transform all positions consistently
         self.transformed_positions = []
 
-
         # # In determine_pitch_side_and_transform():
         for x, y in self.original_positions:
             if target_goal_x == 0:  # Left goal
@@ -1600,7 +3638,6 @@ class ShotTransitionDialog(QDialog):
             # field_x=12000 (goal) -> widget_y=rect.top
             normalized_x = (field_x - self.pitch_x0) / (self.pitch_x1 - self.pitch_x0)
             widget_y = rect.y() + rect.height() - (normalized_x * rect.height())  # Flip for right side
-
 
         normalized_y = 1.0 - (field_y / self.pitch_wid)  # Flip the Y coordinate
         widget_x = rect.x() + (normalized_y * rect.width())
@@ -1892,6 +3929,7 @@ class ShotTransitionDialog(QDialog):
             progress_text = f"Progress: {self.animation_progress * 100:.1f}% | Frame: {int(self.animation_progress * (self.num_frames - 1)) + 1}/{self.num_frames}"
             painter.drawText(text_rect.adjusted(10, 20, -10, -5), Qt.AlignLeft, progress_text)
 
+
 # -------------------------------------
 # ProcessingThread (action recognition)
 # -------------------------------------
@@ -1991,6 +4029,8 @@ class ActionRecognitionWorker(QThread):
             self.error.emit(f"Processing error: {str(error)}")
 
 
+
+
 # ---------------------------
 # Segment states and VideoSegment data class
 # ---------------------------
@@ -2017,7 +4057,6 @@ class VideoSegment:
     @property
     def duration(self):
         return self.end - self.start
-
 
 # ---------------------------
 # VideoPlayer with VLC
@@ -3353,13 +5392,14 @@ class xG(QMainWindow):
         self.confirmed_segments = []  # to store confirmed segments
         self.initUI()
         self.restore_window_state()
-        # self.setup_shortcuts()
+        self.setup_shortcuts()
         self.error_occurred.connect(self.show_error_message)
         self.preview_popup = PreviewPopup(self)
         self.processingComplete = False
         self.pendingQueue = []  # Queue for incoming pending segments
-        self.segments_pending_homography = []
         self.homography_history = []
+        self.segments_pending_homography = []  # Segments with some landmarks, H failed
+        self.segments_pending_direct_pitch = []  # Segments with no/insufficient landmarks
         self.all_landmarks = {
             # Corners (in meters)
             "Top left corner": (1, 0.0, 0.0),
@@ -3394,10 +5434,10 @@ class xG(QMainWindow):
             "Left arc lower": (12, 18.0, 49.15),
             "Right arc upper": (21, 102.0, 30.85),
             "Right arc lower": (22, 102.0, 49.15),
-            "Left 18yb box meet with pitch boundary top":(2, 0.0, 18.0),
-            "Left 18yb box meet with pitch boundary bottom":(5, 0.0, 62.0),
+            "Left 18yb box meet with pitch boundary top": (2, 0.0, 18.0),
+            "Left 18yb box meet with pitch boundary bottom": (5, 0.0, 62.0),
             "Right 18yb box meet with pitch boundary top": (28, 120.0, 18.0),
-            "Right 18yb box meet with pitch boundary bottom": (31,120.0,62.0),
+            "Right 18yb box meet with pitch boundary bottom": (31, 120.0, 62.0),
             "Right 18yd box top": (20, 102.0, 18.0),  # 10200 → 102m
             "Right 18yd box bottom": (23, 102.0, 62.0),
 
@@ -3413,7 +5453,6 @@ class xG(QMainWindow):
 
         self.id_to_world = {v[0]: (v[1], v[2]) for v in self.all_landmarks.values()}
         self.id_to_landmark = {v[0]: k for k, v in self.all_landmarks.items()}
-
 
         self.scaler_path = "xgboost&lightgbm_feature_scaler_with_zone14.pkl"
         self.xg_model_path = "XGBoost_with_zone14_acc_0.7003_err_0.0820.pkl"
@@ -3890,13 +5929,18 @@ class xG(QMainWindow):
         self.timeline.rebuild_segments()
 
     def interpolate_positions(self, start, end, num=5):
-        return [
-            (
-                start[0] + (end[0] - start[0]) * i / (num - 1),
-                start[1] + (end[1] - start[1]) * i / (num - 1)
-            )
-            for i in range(num)
-        ]
+        """Interpolate between start and end positions."""
+        if num < 2:
+            return [start, end]
+
+        positions = []
+        for i in range(num):
+            t = i / (num - 1)
+            x = start[0] + t * (end[0] - start[0])
+            y = start[1] + t * (end[1] - start[1])
+            positions.append((x, y))
+
+        return positions
 
     def sample_segment_frames(self, video_path, start_time, end_time, num_frames=5):
         cap = cv2.VideoCapture(video_path)
@@ -3915,19 +5959,6 @@ class xG(QMainWindow):
                 frames.append(pixmap)
         cap.release()
         return frames
-
-    def ensure_attacking_direction(self, start_pitch, end_pitch, goal_x=120.0, goal_depth=2.0):
-        sx, sy = start_pitch
-        ex, ey = end_pitch
-        print(f"[DEBUG] ensure_attacking_direction: start=({sx:.2f},{sy:.2f}), end=({ex:.2f},{ey:.2f})")
-        # If end is within the goal, no swap needed
-        if ex > goal_x and ex <= goal_x + goal_depth:
-            return start_pitch, end_pitch
-        # Swap if end x is less than start x (ensure direction towards goal)
-        if ex < sx:
-            print("[DEBUG] Swapping start/end to ensure direction toward goal.")
-            return (end_pitch, start_pitch)
-        return (start_pitch, end_pitch)
 
     def show_shot_transition(self, seg):
         if not hasattr(self, "segment_analysis_results") or not self.segment_analysis_results:
@@ -3956,6 +5987,80 @@ class xG(QMainWindow):
         dlg = ShotTransitionDialog(frame_pixmaps, pitch_positions, parent=self)
         dlg.exec_()
 
+    def show_shot_transition_for_retried_segment(self, seg, start_pitch, end_pitch):
+        """Show shot transition visualization for a segment that was retried"""
+
+        print("[DEBUG] Showing shot transition after direct mapping.")
+        frames = self.sample_segment_frames(
+            self.fileName,
+            seg.start,
+            seg.end,
+            num_frames=5
+        )
+        frame_pixmaps = [self.bgr_to_pixmap(frame) for frame in frames]
+        pitch_positions = self.interpolate_positions(start_pitch, end_pitch, num=5)
+        dlg = ShotTransitionDialog(
+            frame_pixmaps,
+            pitch_positions,
+            parent=self,
+            retried=True
+        )
+        dlg.exec_()
+
+    def _show_confirm_dialog(self,
+                             title: str,
+                             message: str,
+                             yes_text: str = "Yes",
+                             no_text: str = "No",
+                             default: int = QMessageBox.Yes):
+        """
+        Show a modal Yes/No dialog and return a QMessageBox.StandardButton-like value.
+        Return values: QMessageBox.Yes or QMessageBox.No
+
+        Usage:
+            resp = self._show_confirm_dialog("Reopen?", "Would you like to reopen mapping?")
+            if self._confirm_yes(resp):
+                ...
+        """
+        parent = self if hasattr(self, "parent") or True else None
+        msg = QMessageBox(parent)
+        msg.setIcon(QMessageBox.Question)
+        msg.setWindowTitle(title)
+        msg.setText(message)
+
+        # Add custom-labeled buttons and keep references
+        yes_btn = msg.addButton(yes_text, QMessageBox.YesRole)
+        no_btn = msg.addButton(no_text, QMessageBox.NoRole)
+
+        # Set default button
+        if int(default) == int(QMessageBox.Yes):
+            msg.setDefaultButton(yes_btn)
+        else:
+            msg.setDefaultButton(no_btn)
+
+        # Execute and return a standardized value
+        msg.exec_()
+        clicked = msg.clickedButton()
+        if clicked is yes_btn:
+            return QMessageBox.Yes
+        else:
+            return QMessageBox.No
+
+    def _confirm_yes(self, resp) -> bool:
+        """
+        Robust check that returns True if `resp` means 'Yes/Confirm'.
+        Accepts either:
+          - a bool (True/False),
+          - a QMessageBox.StandardButton (e.g. QMessageBox.Yes),
+          - or an int (compat).
+        """
+        try:
+            if isinstance(resp, bool):
+                return resp
+            return int(resp) == int(QMessageBox.Yes)
+        except Exception:
+            return False
+
     def detect_pitch_keypoints_with_fallback(
             self,
             frames: List[np.ndarray],
@@ -3982,29 +6087,29 @@ class xG(QMainWindow):
             edges = [
                 (1, 27), (1, 6), (6, 32), (27, 32),  # pitch boundary
                 (2, 10),  # left 18 yard box meets pitch boundary at the top to left 18 yard box top
-                (3, 7),   # left 6 yard box meets pitch boundary at the top to left 6 yard box top
-                (4, 8),   # left 6 yard box meets pitch boundary at the bottom to left 6 yard box bottom
-                (7, 8),   # left 6 yard box top to bottom
-                (3, 4),   # left 6 yard box meets pitch boundary at the top to bottom
+                (3, 7),  # left 6 yard box meets pitch boundary at the top to left 6 yard box top
+                (4, 8),  # left 6 yard box meets pitch boundary at the bottom to left 6 yard box bottom
+                (7, 8),  # left 6 yard box top to bottom
+                (3, 4),  # left 6 yard box meets pitch boundary at the top to bottom
                 (10, 11),
                 (11, 12),
                 (12, 13),
                 # (10, 13), #left 18 yd box top to left 18 yd box bottom
                 (5, 13),  # left 18 yard box meets pitch boundary at the bottom to left 18 yard box bottom
-                (15, 18), # top center of pitch to bottom center
-                (28, 20), # right 18 yard box meets pitch boundary at the top to right 18 yard box top
+                (15, 18),  # top center of pitch to bottom center
+                (28, 20),  # right 18 yard box meets pitch boundary at the top to right 18 yard box top
                 (20, 21),
                 (21, 22),
                 (22, 23),
                 (27, 28),
                 (28, 29),
-                (29, 25), # right 6 yard box meets pitch boundary at the top to right 6 yard box top
-                (30, 26), # right 6 yard box meets pitch boundary at the bottom to right 6 yard box bottom
-                (25, 26), # right 6 yard box top to bottom
-                (29, 30), # right 6 yard box meets pitch boundary at the top to bottom
+                (29, 25),  # right 6 yard box meets pitch boundary at the top to right 6 yard box top
+                (30, 26),  # right 6 yard box meets pitch boundary at the bottom to right 6 yard box bottom
+                (25, 26),  # right 6 yard box top to bottom
+                (29, 30),  # right 6 yard box meets pitch boundary at the top to bottom
                 (30, 31),
                 (31, 32),
-                (31, 23), # right 18 yard box meets pitch boundary at the bottom to right 18 yard box bottom
+                (31, 23),  # right 18 yard box meets pitch boundary at the bottom to right 18 yard box bottom
 
             ]
 
@@ -4035,7 +6140,7 @@ class xG(QMainWindow):
 
         except Exception:
             traceback.print_exc()
-            return None, None
+            return {}, set()
 
     def compute_homography_from_keypoints(self, filtered_kps, id_to_world):
         if filtered_kps is None or len(filtered_kps) < 4:
@@ -4080,14 +6185,6 @@ class xG(QMainWindow):
             print(f"[HOMO] Exception during cv2.findHomography: {e}")
             return None
 
-    def get_best_fallback_homography(self, seg):
-        if not self.homography_history:
-            return None
-        seg_time = (seg.start + seg.end) / 2
-        best = min(self.homography_history, key=lambda h: abs(((h["start_time"] + h["end_time"]) / 2) - seg_time))
-        print(f'[BEST H];{best}')
-        return best["homography"]
-
     def sample_segment_frames(self, video_path, start_time, end_time, num_frames=5):
         """Sample num_frames evenly spaced frames between start_time and end_time."""
         cap = cv2.VideoCapture(video_path)
@@ -4111,87 +6208,6 @@ class xG(QMainWindow):
             return None
         return frame  # BGR numpy array
 
-    def retry_pending_segments_with_homography(self, fallback_H):
-        """Try to process all segments that previously failed homography using the new fallback_H."""
-        if fallback_H is None or not isinstance(fallback_H, np.ndarray):
-            return
-
-        still_pending = []
-
-        for entry in self.segments_pending_homography:
-            seg = entry["segment"]
-            frames = entry["frames"]
-
-            try:
-                # Use the first and last frame for ball position annotation
-                start_frame = frames[0]
-                end_frame = frames[-1]
-                start_pixmap = self.bgr_to_pixmap(start_frame)
-                end_pixmap = self.bgr_to_pixmap(end_frame)
-
-                # Ball annotation dialogs
-                dialog = PointAnnotationDialog(start_pixmap,
-                                               "Mark ball position at Shot Start:",
-                                               seg.start,
-                                               self)
-                if dialog.exec_() == QDialog.Accepted and dialog.annotation:
-                    start_ball_pos = dialog.annotation
-                else:
-                    still_pending.append(entry)
-                    continue
-
-                dialog = PointAnnotationDialog(end_pixmap,
-                                               "Mark final ball position after shot:",
-                                               seg.end,
-                                               self)
-                if dialog.exec_() == QDialog.Accepted and dialog.annotation:
-                    end_ball_pos = dialog.annotation
-                else:
-                    still_pending.append(entry)
-                    continue
-
-                # Project ball positions and compute xG
-                start_pitch = self.project_point(start_ball_pos, fallback_H)
-                end_pitch = self.project_point(end_ball_pos, fallback_H)
-
-                if start_pitch and end_pitch:
-                    xg_val = self.xg_model.predict(start_pitch, end_pitch)
-                    if xg_val is not None:
-                        self.show_xg_result(xg_val, start_pitch, end_pitch)
-                        # Show shot transition for retried segment
-                        self.show_shot_transition(seg)
-
-                        # Save results for this retried segment
-                        seg_data = {
-                            "start_time": seg.start,
-                            "end_time": seg.end,
-                            "homography": fallback_H.tolist(),
-                            "start_ball_pos": start_ball_pos,
-                            "end_ball_pos": end_ball_pos,
-                            "start_pitch_pos": start_pitch,
-                            "end_pitch_pos": end_pitch,
-                            "retried": True  # Mark as retried segment
-                        }
-
-                        if not hasattr(self, "segment_analysis_results"):
-                            self.segment_analysis_results = []
-                        self.segment_analysis_results.append(seg_data)
-                    else:
-                        self.show_error_message("Could not compute expected goals for a previously failed segment.")
-                        still_pending.append(entry)
-                else:
-                    self.show_error_message("Could not project ball positions for a previously failed segment.")
-                    still_pending.append(entry)
-
-            except Exception as e:
-                print(f"Error retrying segment: {e}")
-                still_pending.append(entry)
-
-        # Update the pending list
-        self.segments_pending_homography = still_pending
-
-        if len(still_pending) < len(self.segments_pending_homography):
-            self.update_status_text()
 
     def bgr_to_pixmap(self, bgr_img):
         rgb_img = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
@@ -4225,6 +6241,7 @@ class xG(QMainWindow):
 
             # Apply homography transformation
             pitch_pt = H @ pt_arr
+            print(f"[DEBUG] Pixel pt={pt_arr.tolist()} → raw_homog={pitch_pt.tolist()}")
 
             # Check for division by zero (points at infinity)
             if abs(pitch_pt[2]) < 1e-8:
@@ -4234,6 +6251,8 @@ class xG(QMainWindow):
             # Convert from homogeneous to Cartesian coordinates
             x = pitch_pt[0] / pitch_pt[2]
             y = pitch_pt[1] / pitch_pt[2]
+
+            print(f"[DEBUG] World coords: ({x:.3f}, {y:.3f}) from pixel ({pt['x']:.1f}, {pt['y']:.1f})")
 
             # Define pitch boundaries (in meters)
             # Standard soccer pitch: 100-130m length, 50-100m width
@@ -4270,6 +6289,202 @@ class xG(QMainWindow):
         QApplication.processEvents()
         return dlg
 
+    def retry_pending_segments_with_homography(self, fallback_H):
+        """Try to process all segments that previously failed homography using the new fallback_H."""
+        if fallback_H is None or not isinstance(fallback_H, np.ndarray):
+            return
+        still_pending = []
+        for entry in self.segments_pending_homography:
+            seg = entry["segment"]
+            frames = entry["frames"]
+            try:
+                start_frame = frames[0]
+                end_frame = frames[-1]
+                start_pixmap = self.bgr_to_pixmap(start_frame)
+                end_pixmap = self.bgr_to_pixmap(end_frame)
+                dialog = PointAnnotationDialog(start_pixmap, "Mark ball position at Shot Start:", seg.start, self)
+                if dialog.exec_() == QDialog.Accepted and dialog.annotation:
+                    start_ball_pos = dialog.annotation
+                else:
+                    still_pending.append(entry)
+                    continue
+                dialog = PointAnnotationDialog(end_pixmap, "Mark final ball position after shot:", seg.end, self)
+                if dialog.exec_() == QDialog.Accepted and dialog.annotation:
+                    end_ball_pos = dialog.annotation
+                else:
+                    still_pending.append(entry)
+                    continue
+                start_pitch = self.project_point(start_ball_pos, fallback_H)
+                end_pitch = self.project_point(end_ball_pos, fallback_H)
+                if start_pitch and end_pitch:
+                    xg_val = self.xg_model.predict(start_pitch, end_pitch)
+                    if xg_val is not None:
+                        self.show_xg_result(xg_val, start_pitch, end_pitch)
+                        self.show_shot_transition_for_retried_segment(seg, start_pitch, end_pitch)
+                        seg_data = {
+                            "start_time": seg.start,
+                            "end_time": seg.end,
+                            "homography": fallback_H.tolist(),
+                            "start_ball_pos": start_ball_pos,
+                            "end_ball_pos": end_ball_pos,
+                            "start_pitch_pos": start_pitch,
+                            "end_pitch_pos": end_pitch,
+                            "retried": True
+                        }
+                        if not hasattr(self, "segment_analysis_results"):
+                            self.segment_analysis_results = []
+                        self.segment_analysis_results.append(seg_data)
+                    else:
+                        self.show_error_message("Could not compute expected goals for a previously failed segment.")
+                        still_pending.append(entry)
+                else:
+                    self.show_error_message("Could not project ball positions for a previously failed segment.")
+                    still_pending.append(entry)
+            except Exception as e:
+                print(f"Error retrying segment: {e}")
+                still_pending.append(entry)
+
+        old_len = len(self.segments_pending_homography)
+        self.segments_pending_homography = still_pending
+        if len(self.segments_pending_homography) < old_len:
+            self.update_status_text()
+
+    def retry_pending_segments_with_direct_pitch(self):
+        still_pending = []
+        for entry in self.segments_pending_direct_pitch:
+            seg = entry["segment"]
+            frames = entry["frames"]
+            if not frames or frames[0] is None or frames[-1] is None:
+                print("[ERROR] No valid frames for direct pitch annotation.")
+                still_pending.append(entry)
+                continue
+            start_frame_pixmap = self.bgr_to_pixmap(frames[0])
+            end_frame_pixmap = self.bgr_to_pixmap(frames[-1])
+            if start_frame_pixmap is None or start_frame_pixmap.isNull():
+                print("[ERROR] Invalid start frame pixmap.")
+                still_pending.append(entry)
+                continue
+            if end_frame_pixmap is None or end_frame_pixmap.isNull():
+                print("[ERROR] Invalid end frame pixmap.")
+                still_pending.append(entry)
+                continue
+            try:
+                start_dlg = DirectPitchAnnotationDialog(
+                    start_frame_pixmap, marker_color=Qt.blue, marker_label="Shot Start", parent=self
+                )
+            except Exception as e:
+                print(f"[ERROR] Failed to create DirectPitchAnnotationDialog: {e}")
+                still_pending.append(entry)
+                continue
+            if start_dlg.exec_() != QDialog.Accepted:
+                still_pending.append(entry)
+                continue
+            start_pitch = start_dlg.get_absolute_pitch_coordinates()
+            try:
+                end_dlg = DirectPitchAnnotationDialog(
+                    end_frame_pixmap, marker_color=Qt.red, marker_label="Shot End", parent=self
+                )
+            except Exception as e:
+                print(f"[ERROR] Failed to create DirectPitchAnnotationDialog: {e}")
+                still_pending.append(entry)
+                continue
+            if end_dlg.exec_() != QDialog.Accepted:
+                still_pending.append(entry)
+                continue
+            end_pitch = end_dlg.get_absolute_pitch_coordinates()
+            self.process_segment_with_pitch_positions(seg, start_pitch, end_pitch)
+        self.segments_pending_direct_pitch = still_pending
+
+    def attempt_direct_pitch(self, seg, frames):
+        """
+        Immediately ask user to do direct pitch annotation (start/end).
+        Show high-quality RGB reference frames (start frame and end frame) in a scrollable view.
+        Compute xG immediately after both pitch points are supplied (no ball annotation step).
+        Returns True if processed, False if user cancelled or failed.
+        """
+        try:
+            # frames is expected to be a list-like of QPixmap / QImage / or objects convertible to QPixmap.
+            start_frame_pixmap = None
+            end_frame_pixmap = None
+            if frames:
+                # prefer first and last frame provided
+                try:
+                    start_frame_pixmap = self.bgr_to_pixmap(frames[0])
+                    end_frame_pixmap =  self.bgr_to_pixmap(frames[-1])
+                except Exception:
+                    # defensive fallback if frames is not indexable
+                    pass
+
+            # Ask for start pitch using a direct-pitch dialog that shows the start reference frame
+            start_dlg = DirectPitchAnnotationDialog(frame_pixmap=start_frame_pixmap,
+                                                    marker_color=Qt.green,
+                                                    marker_label="Shot Start",
+                                                    parent=self)
+            if start_dlg.exec_() != QDialog.Accepted:
+                # user cancelled start mapping
+                return False
+            start_pitch = start_dlg.get_absolute_pitch_coordinates()
+            if not start_pitch:
+                # user accepted dialog but did not place a pitch marker
+                self.show_error_message("Start pitch marker not provided.")
+                return False
+
+            # Ask for end pitch using a direct-pitch dialog that shows the end reference frame
+            end_dlg = DirectPitchAnnotationDialog(frame_pixmap=end_frame_pixmap,
+                                                  marker_color=Qt.red,
+                                                  marker_label="Shot End",
+                                                  parent=self)
+            if end_dlg.exec_() != QDialog.Accepted:
+                # user cancelled end mapping
+                return False
+            end_pitch = end_dlg.get_absolute_pitch_coordinates()
+            if not end_pitch:
+                self.show_error_message("End pitch marker not provided.")
+                return False
+
+            self.process_segment_with_pitch_positions(seg, start_pitch, end_pitch)
+
+            return True
+
+        except Exception as e:
+            print(f"[ERROR] attempt_direct_pitch_now error: {e}")
+            return False
+
+
+    def process_segment_with_pitch_positions(self, seg, start_pitch, end_pitch):
+        """
+        Given the segment and start/end pitch coordinates (typically in pitch meters or the
+        normalized coordinate system you use), compute xG immediately, show the xG UI
+        and the shot transition visualization, and save the result in analysis structures.
+        """
+        try:
+
+            xg_val = self.xg_model.predict(start_pitch, end_pitch)
+            self.show_xg_result(xg_val, start_pitch, end_pitch)
+            self.show_shot_transition_for_retried_segment(seg, start_pitch, end_pitch)
+
+            seg_data = {
+                "start_time": seg.start,
+                "end_time": seg.end,
+                "homography": None,
+                "start_ball_pos": None,
+                "end_ball_pos": None,
+                "start_pitch_pos": start_pitch,
+                "end_pitch_pos": end_pitch,
+                "retried": True,
+                "direct_pitch_annotation": True
+            }
+            if not hasattr(self, "segment_analysis_results"):
+                self.segment_analysis_results = []
+            self.segment_analysis_results.append(seg_data)
+
+            # Update status UI / counters
+            self.update_status_text()
+
+        except Exception as e:
+            print(f"[ERROR] process_segment_with_pitch_positions: {e}")
+            self.show_error_message("Failed to process segment with direct pitch positions.")
+
     def process_confirmed_segment(self, seg):
         progress_dlg = self.show_processing_progress("Analyzing shot segment...", max_value=100)
         try:
@@ -4296,15 +6511,103 @@ class xG(QMainWindow):
                 segment=seg
             )
 
-            # If user cancelled or insufficient keypoints, defer processing
-            if not keypoints or len(keypoint_ids) < 4:
+            # Normalize just-in-case (detect_pitch_keypoints_with_fallback now returns {} and set())
+            if keypoints is None:
+                keypoints = {}
+            if keypoint_ids is None:
+                keypoint_ids = set()
+
+            num_points = len(keypoint_ids or set())
+
+            # --- CASE A: user mapped nothing / closed the dialog (0 points) ---
+            if num_points == 0:
+                # Let the user retry mapping repeatedly if they wish.
+                # Loop until we get >=4 points, partial mapping (2-3), or user elects to go to direct-pitch / defer.
+                while True:
+                    resp = self._show_confirm_dialog(
+                        "Landmark mapping closed",
+                        "No landmarks were mapped. Reopen mapping dialog to try again?"
+                    )
+
+                    if resp != QMessageBox.Yes:
+                        # User explicitly declines to reopen mapping. Offer direct pitch now.
+                        proceeded = self.attempt_direct_pitch(seg, frames)
+                        if proceeded:
+                            return
+                        else:
+                            # User cancelled direct-pitch -> defer for later
+                            self.segments_pending_direct_pitch.append({"segment": seg, "frames": frames})
+                            self.show_error_message("Direct pitch annotation deferred to later.")
+                            self.update_status_text()
+                            print(f"[DEBUG] Pending direct pitch count: {len(self.segments_pending_direct_pitch)}")
+                            return
+
+                    # User chose to reopen mapping
+                    keypoints2, keypoint_ids2 = self.detect_pitch_keypoints_with_fallback(
+                        frames=frames,
+                        id_to_world=self.id_to_world,
+                        id_to_landmark=self.id_to_landmark,
+                        left_side_ids=self.left_side_ids,
+                        right_side_ids=self.right_side_ids,
+                        segment=seg
+                    )
+
+                    keypoints2 = keypoints2 or {}
+                    keypoint_ids2 = keypoint_ids2 or set()
+                    kcount = len(keypoint_ids2)
+
+                    if kcount >= 4:
+                        # success — fall through to homography path below
+                        keypoints, keypoint_ids = keypoints2, keypoint_ids2
+                        break
+
+                    if kcount == 0:
+                        # Either user closed dialog again or detection returned 0.
+                        # Ask whether to try again or go to direct pitch.
+                        retry_resp = self._show_confirm_dialog(
+                            "Still no landmarks",
+                            "Still no landmarks were mapped. Try mapping again?"
+                        )
+                        if retry_resp == QMessageBox.Yes:
+                            continue
+                        else:
+                            # user chose no -> proceed to direct pitch attempt
+                            proceeded = self.attempt_direct_pitch_now(seg, frames)
+                            if proceeded:
+                                return
+                            else:
+                                self.segments_pending_direct_pitch.append({"segment": seg, "frames": frames})
+                                self.show_error_message("Direct pitch annotation deferred to later.")
+                                self.update_status_text()
+                                print(f"[DEBUG] Pending direct pitch count: {len(self.segments_pending_direct_pitch)}")
+                                return
+
+                    # Partial mapping (2-3)
+                    if kcount in (2, 3):
+                        # Save partial mapping for retry later so the user or an automated process can continue.
+                        self.segments_pending_homography.append({
+                            "segment": seg,
+                            "frames": frames,
+                            "keypoints": keypoints2,
+                            "keypoint_ids": keypoint_ids2
+                        })
+                        self.show_error_message("Partial landmark mapping (2-3 points) saved for retry.")
+                        print(f"[DEBUG] Pending homography count: {len(self.segments_pending_homography)}")
+                        return
+
+
+
+            # --- CASE B: 2 or 3 points mapped (insufficient for homography) ---
+            if num_points in (2, 3):
+                # Save partial mapping for retry later
                 self.segments_pending_homography.append({
                     "segment": seg,
                     "frames": frames,
-                    "keypoints": None,
-                    "keypoint_ids": None
+                    "keypoints": keypoints,
+                    "keypoint_ids": keypoint_ids
                 })
-                self.show_error_message("xG will be computed for this segment later when more landmarks are available.")
+                self.show_error_message(
+                    "Partial landmark mapping (2-3 points) saved for retry. xG will be computed when more landmarks are available.")
                 return
 
             # 3. Compute homography directly from manual keypoints
@@ -4380,6 +6683,7 @@ class xG(QMainWindow):
 
                     # Try to process any previously failed segments using this homography
                     self.retry_pending_segments_with_homography(homography)
+                    self.retry_pending_segments_with_direct_pitch()
                 else:
                     self.show_error_message("Could not compute expected goals for this segment.")
             else:
@@ -4409,11 +6713,10 @@ class xG(QMainWindow):
         except Exception as e:
             self.show_error_message(f"An error occurred during processing: {str(e)}")
             print(f"Error in process_confirmed_segment: {e}")
-            import traceback
+
             traceback.print_exc()
         finally:
             progress_dlg.close()
-
         self.update_status_text()
 
     def show_xg_result(self, xg_val, start_pitch, end_pitch):
@@ -4613,7 +6916,7 @@ class xG(QMainWindow):
         if not self.review_btn.isEnabled():
             self.review_btn.setEnabled(True)
 
-        # 4) Refresh the left‐pane stats
+        # 4) Refresh the left-pane stats
         self.update_status_text()
 
     def start_processing(self):
@@ -4685,32 +6988,110 @@ class xG(QMainWindow):
         QMessageBox.critical(self, "Action Recognition Error", error_message)
         self.process_btn.complete(False)
 
+    def _call_if_video_ready(self, fn, *args, **kwargs):
+        try:
+            if getattr(self, "video_player", None) is None:
+                try:
+                    self.statusBar().showMessage("Video not loaded", 1200)
+                except Exception:
+                    pass
+                return
+            return fn(*args, **kwargs)
+        except Exception as e:
+            print(f"Shortcut handler failed: {e}")
+
+    def _shortcut_play_pause(self):
+        # This will call self.video_player.play_pause_toggle() only if video_player exists
+        self._call_if_video_ready(lambda: self.video_player.play_pause_toggle())
+
+    def _shortcut_seek(self, seconds):
+        self._call_if_video_ready(lambda: self.video_player.seek_relative(seconds))
+
+    def _shortcut_confirm_segment(self):
+        try:
+            self.confirm_segment()
+        except Exception:
+            self._call_if_video_ready(lambda: self.video_player.confirm_segment())
+
+    def _shortcut_skip_segment(self):
+        try:
+            self.skip_segment()
+        except Exception:
+            self._call_if_video_ready(lambda: self.video_player.skip_segment())
+
+    def _shortcut_preview_segment(self):
+        try:
+            self.preview_segment()
+        except Exception:
+            self._call_if_video_ready(lambda: self.video_player.preview_segment())
+
     def setup_shortcuts(self):
-        if self.video_player is None:
-            print("Warning: video_player is not yet initialized!")
-            return
-        shortcuts = {
-            'F11': self.toggle_fullscreen,
-            'F': self.toggle_fullscreen,
-            'Esc': self.exit_fullscreen,
-            'Space': self.video_player.play_pause_toggle,
-            'Left': partial(self.video_player.rewind, small_step=True),
-            'Right': partial(self.video_player.forward, small_step=True),
-            'Ctrl+Left': partial(self.video_player.rewind, small_step=False),
-            'Ctrl+Right': partial(self.video_player.forward, small_step=False),
-            'M': self.video_player.toggle_mute,
-            'Up': self.volume_up,
-            'Down': self.volume_down,
-            'Meta+Left': self.snap_left,
-            'Meta+Right': self.snap_right
+        """Create application-wide shortcuts. Uses video_player.rewind/forward directly."""
+        # cleanup any previously created shortcuts (safe to call multiple times)
+        if hasattr(self, "_shortcuts") and self._shortcuts:
+            for sc in self._shortcuts:
+                try:
+                    sc.setParent(None)
+                except Exception:
+                    pass
+        self._shortcuts = []
+
+        def _wrap(name, fn):
+            """Wrap handler to give a console trace and swallow handler errors."""
+
+            def _callable():
+                try:
+                    print(f"[SHORTCUT] {name} triggered")
+                    return fn()
+                except Exception as e:
+                    print(f"[SHORTCUT ERROR] {name}: {e}")
+
+            return _callable
+
+        # Map of key sequence -> zero-arg callable
+        mapping = {
+            # fullscreen / window
+            'F11': _wrap('F11', self.toggle_fullscreen),
+            'F': _wrap('F', self.toggle_fullscreen),
+            'Esc': _wrap('Esc', self.exit_fullscreen),
+
+            # playback toggle (assumes _shortcut_play_pause is zero-arg and safe)
+            'Space': _wrap('Space', self._shortcut_play_pause),
+
+            # SEEKING — use video_player.rewind/forward directly.
+            # Assumes signatures: rewind(small_step=True/False) and forward(small_step=True/False)
+            # Left/Right = small step; Ctrl+Left/Ctrl+Right = large step
+            'Left': _wrap('Left', partial(self.video_player.rewind, small_step=True)),
+            'Right': _wrap('Right', partial(self.video_player.forward, small_step=True)),
+            'Ctrl+Left': _wrap('Ctrl+Left', partial(self.video_player.rewind, small_step=False)),
+            'Ctrl+Right': _wrap('Ctrl+Right', partial(self.video_player.forward, small_step=False)),
+
+            # audio / misc (change to bound method if you prefer no lambda)
+            'M': _wrap('M', lambda: self.video_player.toggle_mute() if getattr(self, 'video_player', None) else None),
+            'Up': _wrap('Up', self.volume_up),
+            'Down': _wrap('Down', self.volume_down),
+
+            # window snap (Meta is platform-dependent; you can duplicate with Ctrl if needed)
+            'Meta+Left': _wrap('Meta+Left', self.snap_left),
+            'Meta+Right': _wrap('Meta+Right', self.snap_right),
         }
-        shortcuts.update({
-            'C': lambda: self.confirm_segment(),
-            'S': lambda: self.skip_segment(),
-            'P': lambda: self.preview_segment(),
+
+        # Review controls — connect bound methods directly (zero-arg callables)
+        mapping.update({
+            'C': _wrap('C (confirm)', self._shortcut_confirm_segment),
+            'S': _wrap('S (skip)', self._shortcut_skip_segment),
+            'P': _wrap('P (preview)', self._shortcut_preview_segment),
         })
-        for key, func in shortcuts.items():
-            QShortcut(QKeySequence(key), self, func)
+
+        # create QShortcut objects and attach them
+        for seq_text, handler in mapping.items():
+            try:
+                sc = QShortcut(QKeySequence(seq_text), self)
+                sc.setContext(Qt.ApplicationShortcut)
+                sc.activated.connect(handler)
+                self._shortcuts.append(sc)
+            except Exception as e:
+                print(f"[SHORTCUT SETUP ERROR] {seq_text}: {e}")
 
     def volume_up(self):
         current = self.volume_slider.value()
@@ -4791,7 +7172,7 @@ class xG(QMainWindow):
         self.review_btn.show_progress(False)
         self.review_btn.complete(False)
 
-        # 4) **Clear the text from each status label** so it won't say "Video validated!" or "Shot detection complete!"
+        # 4) Clear the text from each status label
         self.upload_btn.status.setText("")
         self.upload_btn.status.setVisible(False)
         self.process_btn.status.setText("")
@@ -4886,802 +7267,6 @@ class xG(QMainWindow):
     def show_error_message(self, msg):
         QMessageBox.critical(self, "Error", msg)
 
-class FrameSelectorDialog(QDialog):
-    def __init__(self, frames, parent=None, segment=None):
-        super().__init__(parent)
-        self.frames = frames
-        self.current_index = 0
-        self.selected_frame = None
-        self.segment = segment
-
-        # Calculate frame timestamps if segment is provided
-        if segment:
-            self.frame_timestamps = np.linspace(segment.start, segment.end, len(frames))
-        else:
-            self.frame_timestamps = None
-
-        self.setWindowTitle("Select Frame")
-        self.setup_ui()
-        self.update_frame()
-
-    def setup_ui(self):
-        layout = QVBoxLayout()
-
-        # Image display
-        self.image_label = QLabel()
-        self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setMinimumSize(800, 450)  # 16:9 aspect ratio
-        self.image_label.setStyleSheet("QLabel { background-color: black; }")
-        layout.addWidget(self.image_label)
-
-        # Frame info
-        info_layout = QHBoxLayout()
-        self.frame_counter = QLabel()
-        info_layout.addWidget(self.frame_counter)
-
-        if self.frame_timestamps is not None:
-            self.timestamp_label = QLabel()
-            info_layout.addWidget(self.timestamp_label)
-
-        info_layout.addStretch()
-        layout.addLayout(info_layout)
-
-        # Navigation buttons
-        nav_layout = QHBoxLayout()
-
-        self.prev_button = QPushButton("Previous Frame")
-        self.prev_button.clicked.connect(self.prev_frame)
-        nav_layout.addWidget(self.prev_button)
-
-        self.next_button = QPushButton("Next Frame")
-        self.next_button.clicked.connect(self.next_frame)
-        nav_layout.addWidget(self.next_button)
-
-        nav_layout.addStretch()
-
-        # Action buttons
-        self.select_button = QPushButton("Select This Frame")
-        self.select_button.clicked.connect(self.accept_frame)
-        nav_layout.addWidget(self.select_button)
-
-        self.cancel_button = QPushButton("Cancel")
-        self.cancel_button.clicked.connect(self.reject)
-        nav_layout.addWidget(self.cancel_button)
-
-        layout.addLayout(nav_layout)
-        self.setLayout(layout)
-
-    def update_frame(self):
-        frame = self.frames[self.current_index]
-        # Convert BGR to RGB before displaying
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        height, width = rgb_frame.shape[:2]
-        bytes_per_line = 3 * width
-        q_img = QImage(rgb_frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
-        pixmap = QPixmap.fromImage(q_img)
-
-        # Scale pixmap to fit label while maintaining aspect ratio
-        scaled_pixmap = pixmap.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self.image_label.setPixmap(scaled_pixmap)
-
-        # Update frame counter
-        self.frame_counter.setText(f"Frame {self.current_index + 1} of {len(self.frames)}")
-
-        # Update timestamp if available
-        if self.frame_timestamps is not None:
-            timestamp = self.frame_timestamps[self.current_index]
-            self.timestamp_label.setText(f"Time: {timestamp:.2f}s")
-
-        # Update button states
-        self.prev_button.setEnabled(self.current_index > 0)
-        self.next_button.setEnabled(self.current_index < len(self.frames) - 1)
-
-    def prev_frame(self):
-        if self.current_index > 0:
-            self.current_index -= 1
-            self.update_frame()
-
-    def next_frame(self):
-        if self.current_index < len(self.frames) - 1:
-            self.current_index += 1
-            self.update_frame()
-
-    def accept_frame(self):
-        self.selected_frame = self.frames[self.current_index]
-        self.accept()
-
-@dataclass
-class SoccerPitchConfiguration:
-    width: float = 80.0
-    length: float = 120.0
-    penalty_box_length: float = 16.5
-    goal_box_length:    float = 5.5
-    penalty_box_width:  float = 40.32
-    goal_box_width:     float = 18.32
-    penalty_spot_distance: float = 11.0
-    centre_circle_radius:  float = 9.15
-
-    # Top‑level list of landmark names *in the exact order you want IDs 1…32*:
-    LANDMARK_NAMES = [
-        "Top left corner",  # 1
-        "Left 18yb boundary top",  # 2
-        "Left 6yd boundary top",  # 3
-        "Left 6yd boundary bottom",  # 4
-        "Left 18yb boundary bottom",  # 5
-        "Left penalty spot",  # 6
-        "Left 18yd box top",  # 7
-        "Left 6yd box top",  # 8
-        "Left 6yd box bottom",  # 9
-        "Left arc upper",  # 10
-        "Left arc lower",  # 11
-        "Left 18yd box bottom",  # 12
-        "Bottom left corner",  # 13
-
-        "Top center line",  # 14
-        "Center circle left",  # 15
-        "Center circle top",  # 16
-        "Center circle bottom",  # 17
-        "Center circle right",  # 18
-        "Bottom center line",  # 19
-
-        "Top right corner",  # 20
-        "Right 18yd box top",  # 21
-        "Right 6yd box top",  # 22
-        "Right 6yd box bottom",  # 23
-        "Right arc upper",  # 24
-        "Right arc lower",  # 25
-        "Right 18yb boundary top",  # 26
-        "Right 6yd boundary top",  # 27
-        "Right 6yd boundary bottom",  # 28
-        "Right 18yb boundary bottom",  # 29
-        "Right penalty spot",  # 30
-        "Right 18yd box bottom",  # 31
-        "Bottom right corner",  # 32
-    ]
-    all_landmarks: Dict[str, Tuple[int, float, float]] = field(default_factory=dict)
-    @property
-    def vertices(self) -> List[Tuple[float, float]]:
-        return [(self.all_landmarks[name][1], self.all_landmarks[name][2])
-                for name in self.LANDMARK_NAMES]
-
-class SchematicPitchGridWidget(QWidget):
-    landmarkDragged = pyqtSignal(int, QPoint)
-    landmarkDropped = pyqtSignal(int, QPoint)
-
-    def __init__(self, landmarks, edges, pitch_config=None, parent=None, margin=20):
-        super().__init__(parent)
-        self.landmarks = dict(landmarks)
-        next_id = max(self.landmarks.keys(), default=0) + 1
-        self.landmarks[next_id] = ("Centre Pitch", (60.0, 40.0))
-        self.edges = edges
-        self.margin = margin
-        self.selected = set()
-        self.hovered = None
-        self.radius = 10  # Slightly smaller radius for cleaner look
-        self.pitch_config = pitch_config or SoccerPitchConfiguration()
-        self.setMouseTracking(True)
-        self.drag_start_lid = None
-        self.drag_start_pos = None
-
-        # Set a fixed size for the grid widget based on the pitch dimensions
-        ppm = 7  # pixels per meter
-        fixed_width = int(self.pitch_config.length * ppm + 2 * margin)
-        fixed_height = int(self.pitch_config.width * ppm + 2 * margin)
-        self.setFixedSize(fixed_width, fixed_height)  # Use fixed size instead of minimum
-
-        # Change size policy to prevent automatic expansion
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-
-    def sizeHint(self):
-        # Return our fixed size
-        ppm = 7  # preferred pixels per meter
-        width = int(self.pitch_config.length * ppm + 2 * self.margin)
-        height = int(self.pitch_config.width * ppm + 2 * self.margin)
-        return QSize(width, height)
-
-    def setPreferredSize(self, size):
-        self._preferred_size = size
-
-    def get_pitch_rect(self):
-        w, h = self.width(), self.height()
-        m = self.margin
-        pitch_ratio = self.pitch_config.length / self.pitch_config.width
-        avail_w = w - 2 * m
-        avail_h = h - 2 * m
-
-        if avail_w / avail_h > pitch_ratio:
-            # Height is limiting
-            ph = avail_h
-            pw = ph * pitch_ratio
-        else:
-            # Width is limiting
-            pw = avail_w
-            ph = pw / pitch_ratio
-
-        x0 = m + (avail_w - pw) / 2
-        y0 = m + (avail_h - ph) / 2
-        return QRectF(x0, y0, pw, ph)
-
-    def mx(self, x_m):
-        rect = self.get_pitch_rect()
-        return rect.x() + (x_m / self.pitch_config.length) * rect.width()
-
-    def my(self, y_m):
-        rect = self.get_pitch_rect()
-        return rect.y() + (y_m / self.pitch_config.width) * rect.height()
-
-    def get_landmark_at(self, pos: QPoint) -> Optional[int]:
-        """
-        Return the landmark ID whose on‐screen circle contains pos,
-        or None if none.
-        """
-        for lid, (_, (x_m, y_m)) in self.landmarks.items():
-            px, py = self.mx(x_m), self.my(y_m)
-            # distance squared ≤ radius²?
-            dx, dy = pos.x() - px, pos.y() - py
-            if dx * dx + dy * dy <= self.radius * self.radius:
-                return lid
-        return None
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        rect = self.get_pitch_rect()
-
-        # Draw pitch background
-        painter.fillRect(rect, QColor(0, 100, 0))
-
-        # Draw pitch outline
-        painter.setPen(QPen(Qt.white, 2))
-        painter.drawRect(rect)
-
-        # Draw center line
-        center_x = self.mx(self.pitch_config.length / 2)
-        painter.drawLine(
-            QPointF(center_x, rect.y()),
-            QPointF(center_x, rect.y() + rect.height())
-        )
-
-        # Draw all edges (lines)
-        for id1, id2 in self.edges:
-            if id1 in self.landmarks and id2 in self.landmarks:
-                _, (x1, y1) = self.landmarks[id1]
-                _, (x2, y2) = self.landmarks[id2]
-                painter.setPen(QPen(Qt.white, 1.5))
-                painter.drawLine(
-                    QPointF(self.mx(x1), self.my(y1)),
-                    QPointF(self.mx(x2), self.my(y2))
-                )
-
-        # Draw centre circle
-        centre_x, centre_y = self.pitch_config.length / 2, self.pitch_config.width / 2
-        arc_radius = self.pitch_config.centre_circle_radius
-
-        # Calculate QRectF for the circle to account for potential non-square scaling
-        width_in_pixels = arc_radius * 2 * rect.width() / self.pitch_config.length
-        height_in_pixels = arc_radius * 2 * rect.height() / self.pitch_config.width
-
-        circle_rect = QRectF(
-            self.mx(centre_x - arc_radius),
-            self.my(centre_y - arc_radius),
-            width_in_pixels,
-            height_in_pixels
-        )
-
-        painter.setPen(QPen(Qt.white, 2))
-        painter.drawEllipse(circle_rect)
-
-        # Draw penalty arcs for both sides
-        # Left penalty area
-        left_penalty_area = QRectF(
-            rect.x(),
-            self.my(centre_y - self.pitch_config.penalty_box_width / 2),
-            self.pitch_config.penalty_box_length * rect.width() / self.pitch_config.length,
-            self.pitch_config.penalty_box_width * rect.height() / self.pitch_config.width
-        )
-        painter.drawRect(left_penalty_area)
-
-        # Right penalty area
-        right_penalty_area = QRectF(
-            rect.right() - self.pitch_config.penalty_box_length * rect.width() / self.pitch_config.length,
-            self.my(centre_y - self.pitch_config.penalty_box_width / 2),
-            self.pitch_config.penalty_box_length * rect.width() / self.pitch_config.length,
-            self.pitch_config.penalty_box_width * rect.height() / self.pitch_config.width
-        )
-        painter.drawRect(right_penalty_area)
-
-        # Draw points
-        for lid, (name, (x, y)) in self.landmarks.items():
-            px, py = self.mx(x), self.my(y)
-            if lid in self.selected:
-                painter.setBrush(QBrush(Qt.green))
-            elif lid == self.hovered:
-                painter.setBrush(QBrush(Qt.yellow))
-            else:
-                painter.setBrush(QBrush(Qt.white))
-
-            painter.setPen(QPen(Qt.blue if lid in self.selected else Qt.black, 2))
-            painter.drawEllipse(QPointF(px, py), self.radius, self.radius)
-
-    def mousePressEvent(self, event):
-        lid = self.get_landmark_at(event.pos())
-        if lid is not None:
-            self._dragging_id = lid
-            self._orig_pos = event.pos()
-            self.setCursor(Qt.ClosedHandCursor)
-        else:
-            super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        lid = self.get_landmark_at(event.pos())
-        if lid != self.hovered:
-            self.hovered = lid
-            self.update()
-            if lid is not None:
-                name, _ = self.landmarks[lid]
-                QToolTip.showText(event.globalPos(), name, self)
-            else:
-                QToolTip.hideText()
-
-        if hasattr(self, "_dragging_id"):
-            # fire a signal with the landmark and current global pos
-            self.landmarkDragged.emit(self._dragging_id, event.globalPos())
-        else:
-            super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        if hasattr(self, "_dragging_id"):
-            self.unsetCursor()
-            self.landmarkDropped.emit(self._dragging_id, event.globalPos())
-            del self._dragging_id
-        else:
-            super().mouseReleaseEvent(event)
-
-class DraggableFrameLabel(QLabel):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.setAcceptDrops(False)  # we'll handle drops via signals now
-        self.mapped_points = {}  # lid -> (x_img, y_img)
-        self.undo_stack = []  # tuples of (lid, previous_value)
-        self.redo_stack = []
-        self.grid_widget = None
-        self._dragging_landmark = None
-        self._drag_start_global = None
-        self._adjusting_landmark = None  # For fine-tuning existing points
-        self.setMouseTracking(True)  # Enable mouse tracking for hover effects
-
-    def set_grid_widget(self, widget):
-        self.grid_widget = widget
-
-    def get_landmark_at(self, pos: QPoint) -> Optional[int]:
-        """
-        Return the landmark ID whose on-screen circle contains pos,
-        or None if none.
-        """
-        if not self.pixmap():
-            return None
-
-        # Convert to image coordinates
-        lbl_w, lbl_h = self.width(), self.height()
-        img_w, img_h = self.pixmap().width(), self.pixmap().height()
-        scale_x = lbl_w / img_w
-        scale_y = lbl_h / img_h
-
-        for lid, (x_img, y_img) in self.mapped_points.items():
-            # Convert image coordinates to label coordinates
-            x_lbl = x_img * scale_x
-            y_lbl = y_img * scale_y
-
-            # Check if within radius
-            dx, dy = pos.x() - x_lbl, pos.y() - y_lbl
-            if dx * dx + dy * dy <= 10 * 10:  # 10px radius for selection
-                return lid
-
-        return None
-
-    @pyqtSlot(int, QPoint)
-    def startDrag(self, lid, global_pos):
-        """
-        Called when the user mouses‐down on a grid point and starts dragging.
-        We just record which landmark and where we grabbed it.
-        """
-        self._dragging_landmark = lid
-        self._drag_start_global = global_pos
-        # Optionally change cursor:
-        self.setCursor(Qt.ClosedHandCursor)
-
-    @pyqtSlot(int, QPoint)
-    def endDrag(self, lid, global_pos):
-        """
-        Called when the user releases the mouse after dragging a landmark.
-        We convert the global pos into image coords, record undo/redo,
-        and update both frame and grid.
-        """
-        # only handle if it matches the one we started
-        if self._dragging_landmark != lid:
-            return
-
-        # map into our widget coordinates
-        local_pt = self.mapFromGlobal(global_pos)
-        x_lbl = max(0, min(local_pt.x(), self.width() - 1))
-        y_lbl = max(0, min(local_pt.y(), self.height() - 1))
-
-        # if there's a pixmap, convert label coords → pixmap coords
-        if self.pixmap() is not None:
-            lbl_w, lbl_h = self.width(), self.height()
-            img_w, img_h = self.pixmap().width(), self.pixmap().height()
-            # assume scaled to fit QLabel (keep aspect)?
-            # adjust if you use scaledContents or a different scaling policy
-            scale_x = img_w / lbl_w
-            scale_y = img_h / lbl_h
-            x_img = x_lbl * scale_x
-            y_img = y_lbl * scale_y
-        else:
-            # no pixmap: just use label coords
-            x_img, y_img = x_lbl, y_lbl
-
-        # record undo/redo
-        prev = self.mapped_points.get(lid, None)
-        self.undo_stack.append((lid, prev))
-        self.redo_stack.clear()
-
-        # store new mapping
-        self.mapped_points[lid] = (x_img, y_img)
-
-        # tell the grid to mark this one selected/highlighted
-        if self.grid_widget:
-            self.grid_widget.selected.add(lid)
-            self.grid_widget.update()
-
-        # cleanup
-        self._dragging_landmark = None
-        self.unsetCursor()
-        self.update()  # repaint to draw the dashed circle
-
-    def mousePressEvent(self, event):
-        """Handle mouse press for adjusting existing points."""
-        if event.button() == Qt.LeftButton:
-            lid = self.get_landmark_at(event.pos())
-            if lid is not None:
-                # Start adjusting an existing point
-                self._adjusting_landmark = lid
-                self.setCursor(Qt.ClosedHandCursor)
-                # Record position for undo
-                prev = self.mapped_points.get(lid, None)
-                self.undo_stack.append((lid, prev))
-                self.redo_stack.clear()
-
-                if self.grid_widget:
-                    self.grid_widget.selected.add(lid)
-                    self.grid_widget.update()
-
-                event.accept()
-                return
-
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        """Handle mouse movement for adjusting points or hovering effects."""
-        # Handle adjusting (dragging) existing points
-        if self._adjusting_landmark is not None:
-            lid = self._adjusting_landmark
-
-            # Get current position in label coordinates
-            x_lbl = max(0, min(event.x(), self.width() - 1))
-            y_lbl = max(0, min(event.y(), self.height() - 1))
-
-            # Convert to image coordinates
-            if self.pixmap() is not None:
-                lbl_w, lbl_h = self.width(), self.height()
-                img_w, img_h = self.pixmap().width(), self.pixmap().height()
-                scale_x = img_w / lbl_w
-                scale_y = img_h / lbl_h
-                x_img = x_lbl * scale_x
-                y_img = y_lbl * scale_y
-            else:
-                x_img, y_img = x_lbl, y_lbl
-
-            # Update the point position
-            self.mapped_points[lid] = (x_img, y_img)
-            self.update()
-            event.accept()
-            return
-
-        # Handle hover effects for existing points
-        lid = self.get_landmark_at(event.pos())
-        if lid is not None:
-            self.setCursor(Qt.OpenHandCursor)
-            # Show tooltip with landmark name
-            if self.grid_widget and lid in self.grid_widget.landmarks:
-                name = self.grid_widget.landmarks[lid][0]
-                QToolTip.showText(event.globalPos(), name, self)
-        else:
-            self.setCursor(Qt.ArrowCursor)
-            QToolTip.hideText()
-
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        """Handle mouse release for fine adjustments."""
-        if event.button() == Qt.LeftButton and self._adjusting_landmark is not None:
-            self._adjusting_landmark = None
-            self.unsetCursor()
-            self.update()
-            event.accept()
-            return
-
-        super().mouseReleaseEvent(event)
-
-    def paintEvent(self, event):
-        """
-        Draw the frame (via QLabel) then overplot any mapped points
-        with a dashed outline if they're newly dropped.
-        """
-        super().paintEvent(event)
-
-        if not self.pixmap():
-            return
-
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-
-        for lid, (x_img, y_img) in self.mapped_points.items():
-            # convert back into label coords
-            lbl_w, lbl_h = self.width(), self.height()
-            img_w, img_h = self.pixmap().width(), self.pixmap().height()
-            scale_x = lbl_w / img_w
-            scale_y = lbl_h / img_h
-            x_lbl = x_img * scale_x
-            y_lbl = y_img * scale_y
-
-            # Make the point semi-transparent if currently being adjusted
-            if lid == self._adjusting_landmark:
-                # Draw a transparent filled circle
-                painter.setBrush(QBrush(QColor(255, 0, 0, 120)))  # Semi-transparent red
-                painter.setPen(QPen(QColor(255, 0, 0, 200), 2))  # More opaque outline
-                r = 10
-                painter.drawEllipse(QPointF(x_lbl, y_lbl), r, r)
-
-                # Draw crosshairs for precise positioning
-                painter.setPen(QPen(QColor(255, 255, 255, 180), 1))
-                painter.drawLine(QPointF(x_lbl - 12, y_lbl), QPointF(x_lbl + 12, y_lbl))
-                painter.drawLine(QPointF(x_lbl, y_lbl - 12), QPointF(x_lbl, y_lbl + 12))
-            else:
-                # Standard appearance for normal points
-                is_selected = self.grid_widget and lid in self.grid_widget.selected
-                is_hovered = self.get_landmark_at(self.mapFromGlobal(QCursor.pos())) == lid
-
-                if is_hovered:
-                    # Highlight on hover
-                    painter.setBrush(QBrush(QColor(255, 255, 0, 120)))  # Yellow semi-transparent
-                    painter.setPen(QPen(QColor(255, 255, 0, 200), 2))
-                elif is_selected:
-                    # Selected points
-                    painter.setBrush(QBrush(QColor(0, 255, 0, 120)))  # Green semi-transparent
-                    painter.setPen(QPen(QColor(0, 255, 0, 200), 2))
-                else:
-                    # Normal points
-                    painter.setBrush(QBrush(QColor(255, 255, 255, 120)))  # White semi-transparent
-                    painter.setPen(QPen(QColor(0, 0, 0, 180), 2, Qt.DashLine))
-
-                r = 8
-                painter.drawEllipse(QPointF(x_lbl, y_lbl), r, r)
-
-                # Draw a small ID number by the point for better identification
-                if self.grid_widget and lid in self.grid_widget.landmarks:
-                    name = self.grid_widget.landmarks[lid][0]
-                    font = painter.font()
-                    font.setBold(True)
-                    painter.setFont(font)
-                    painter.setPen(QPen(QColor(0, 0, 0, 200), 1))
-
-                    # Draw a small background for better readability
-                    text_rect = QRectF(x_lbl + 10, y_lbl - 6, 25, 15)
-                    painter.fillRect(text_rect, QBrush(QColor(255, 255, 255, 150)))
-
-                    # Draw the landmark ID number
-                    painter.drawText(text_rect, Qt.AlignCenter, str(lid))
-
-    def undo(self):
-        if not self.undo_stack:
-            return
-        lid, prev = self.undo_stack.pop()
-        if lid in self.mapped_points:
-            self.redo_stack.append((lid, self.mapped_points[lid]))
-            if prev is None:
-                del self.mapped_points[lid]
-            else:
-                self.mapped_points[lid] = prev
-            if self.grid_widget:
-                self.grid_widget.selected.discard(lid)
-                self.grid_widget.update()
-            self.update()
-
-    def redo(self):
-        if not self.redo_stack:
-            return
-        lid, pos = self.redo_stack.pop()
-        self.undo_stack.append((lid, self.mapped_points.get(lid, None)))
-        self.mapped_points[lid] = pos
-        if self.grid_widget:
-            self.grid_widget.selected.add(lid)
-            self.grid_widget.update()
-        self.update()
-
-class LandmarkMappingDialog(QDialog):
-    def __init__(self, frame_pixmaps, segment, landmarks, edges, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Pitch Landmark Selection")
-        self.resize(1200, 800)
-
-        # Main horizontal layout with better stretch factors
-        layout = QHBoxLayout(self)
-        layout.setSpacing(10)  # Add some spacing between sections
-        self.frames = frame_pixmaps
-        self.segment = segment
-        self.current_frame = self.frames[0]
-
-        # — Left: Frame + scrolling —
-        left_container = QWidget()
-        left = QVBoxLayout(left_container)
-        left.setContentsMargins(0, 0, 0, 0)
-
-        self.frame_label = DraggableFrameLabel()
-        pix = self._to_pixmap(self.current_frame)
-        self.frame_label.setPixmap(pix)
-        self.frame_label.setAlignment(Qt.AlignCenter)
-        self.frame_label.setMinimumSize(pix.width(), pix.height())
-
-        frame_scroll = QScrollArea()
-        frame_scroll.setWidgetResizable(False)
-        frame_scroll.setWidget(self.frame_label)
-        frame_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
-        frame_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
-        left.addWidget(frame_scroll, 1)
-
-        BUTTON_CSS = """
-                    QPushButton {
-                        background-color: #444444;
-                        color: white;
-                        border: 1px solid #666666;
-                        border-radius: 4px;
-                        padding: 5px 15px;
-                        margin: 8px;
-                        font-size: 14px;
-                    }
-                    QPushButton:hover {
-                        background-color: #666666;
-                    }
-                """
-
-        nav = QHBoxLayout()
-        browse_btn = QPushButton("Browse Frames")
-        browse_btn.clicked.connect(self.browse_frames)
-        browse_btn.setStyleSheet(BUTTON_CSS)
-        nav.addWidget(browse_btn)
-        left.addLayout(nav)
-
-        inst = QLabel("<b>Click & drag points from the pitch grid (right) onto video frame on left.</b><br>"
-                      "Map at least 4 points. If not possible, click browse frames to look for more in other frames")
-        inst.setStyleSheet(
-            "color: #444; font-size: 15px; background: #f9f9f9; "
-            "padding: 8px; border-radius: 8px;"
-        )
-        inst.setWordWrap(True)
-        left.addWidget(inst)
-
-        # — Right: Grid + scrolling —
-        right_container = QWidget()
-        right = QVBoxLayout(right_container)
-        right.setContentsMargins(0, 0, 0, 0)
-
-        self.grid_widget = SchematicPitchGridWidget(landmarks, edges)
-
-        # Calculate appropriate size for the grid based on the pitch dimensions
-        ppm = 7  # pixels per meter
-        w_m = self.grid_widget.pitch_config.length
-        h_m = self.grid_widget.pitch_config.width
-        m = self.grid_widget.margin
-
-        grid_scroll = QScrollArea()
-        grid_scroll.setWidgetResizable(False)  # Important: don't resize the widget to fit
-        grid_scroll.setWidget(self.grid_widget)
-
-        # Set a fixed viewport size for the scroll area to ensure scrollbars appear
-        grid_scroll_viewport_width = min(500, int(w_m * ppm + 2 * m))  # Limit to 500px or calculated size
-        grid_scroll_viewport_height = min(500, int(h_m * ppm + 2 * m))  # Limit to 500px or calculated size
-        grid_scroll.setMinimumSize(grid_scroll_viewport_width, grid_scroll_viewport_height)
-
-        grid_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
-        grid_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
-
-        grid_scroll.setStyleSheet("""
-            QScrollArea {
-                background-color: #1A1A1A;
-                border: 1px solid #444;
-            }
-            QScrollBar:vertical, QScrollBar:horizontal {
-                background: #2D2D2D; width:12px; height:12px; margin:0px;
-            }
-            QScrollBar::handle {
-                background: #444; border-radius:6px;
-            }
-            QScrollBar::handle:hover {
-                background: #666;
-            }
-            QScrollBar::add-line, QScrollBar::sub-line {
-                background:none; height:0px; width:0px;
-            }
-        """)
-        right.addWidget(grid_scroll, 1)
-
-        # — Buttons —
-        buttons_layout = QVBoxLayout()
-        self.confirm_btn = QPushButton("Confirm Mapping")
-        self.confirm_btn.clicked.connect(self.on_confirm)
-        self.undo_btn = QPushButton("Undo")
-        self.undo_btn.clicked.connect(self.frame_label.undo)
-        self.redo_btn = QPushButton("Redo")
-        self.redo_btn.clicked.connect(self.frame_label.redo)
-
-        for b in (self.confirm_btn, self.undo_btn, self.redo_btn):
-            b.setStyleSheet(BUTTON_CSS)
-            buttons_layout.addWidget(b)
-
-        right.addLayout(buttons_layout)
-
-        # Add the left and right containers to the main layout with equal stretching
-        layout.addWidget(left_container, 1)  # 50% width
-        layout.addWidget(right_container, 1)  # 50% width
-
-        # — Connect drag/drop —
-        self.grid_widget.landmarkDragged.connect(self.frame_label.startDrag)
-        self.grid_widget.landmarkDropped.connect(self.frame_label.endDrag)
-        self.frame_label.set_grid_widget(self.grid_widget)
-
-        self.setLayout(layout)
-
-    def get_mapped_points(self):
-        return self.frame_label.mapped_points
-
-    @property
-    def selected_ids(self):
-        return list(self.get_mapped_points().keys())
-
-    def _to_pixmap(self, frame_np):
-        # Convert BGR to RGB
-        rgb_frame = cv2.cvtColor(frame_np, cv2.COLOR_BGR2RGB)
-        h, w, _ = rgb_frame.shape
-        bytes_per_line = 3 * w
-        img = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
-        return QPixmap.fromImage(img)
-
-    def browse_frames(self):
-        dlg = FrameSelectorDialog(self.frames, parent=self, segment=self.segment)
-        if dlg.exec_():
-            self.current_frame = dlg.selected_frame
-            pix = self._to_pixmap(self.current_frame)
-            self.frame_label.setPixmap(pix)
-            self.frame_label.setMinimumSize(pix.width(), pix.height())
-            self.frame_label.update()
-
-    def on_confirm(self):
-        if len(self.frame_label.mapped_points) < 4:
-            # prompt the user to browse more frames
-            dlg = FrameSelectorDialog(self.frames, parent=self, segment=self.segment)
-            if dlg.exec_():
-                # user selected a new frame: replace and continue
-                self.current_frame = dlg.selected_frame
-                pix = self._to_pixmap(self.current_frame)
-                self.frame_label.setPixmap(pix)
-                self.frame_label.setMinimumSize(pix.width(), pix.height())
-                self.frame_label.update()
-            else:
-                # user cancelled browsing: stay here
-                return
-        else:
-            # enough points: accept and close
-            self.accept()
 
 # ---------------------------
 # Entry point
